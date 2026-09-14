@@ -216,6 +216,11 @@
         outline-offset: 2px;
       }
 
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+
       button.primary {
         color: white;
         background: var(--blue);
@@ -357,11 +362,6 @@
         display: flex;
         flex-wrap: wrap;
         gap: 9px;
-      }
-
-      .scenario-steps button:disabled {
-        cursor: default;
-        opacity: 0.45;
       }
 
       .callout {
@@ -682,6 +682,9 @@
         };
       };
 
+      const canCollectEvidence = (current) =>
+        current.bunRecorded && current.frozen && !current.invalidatedBy;
+
       const invalidate = (current, reason) => ({
         ...current,
         generation: current.generation + 1,
@@ -696,6 +699,7 @@
           return { ...current, bunRecorded: true, invalidatedBy: null };
         if (action.type === "freeze") return { ...current, frozen: true, invalidatedBy: null };
         if (action.type === "pass-all") {
+          if (!canCollectEvidence(current)) return current;
           return {
             ...current,
             evidence: {
@@ -726,6 +730,7 @@
           };
         }
         if (action.type === "evidence") {
+          if (!canCollectEvidence(current)) return current;
           const next = { pending: "pass", pass: "fail", fail: "pending" }[
             current.evidence[action.key]
           ];
@@ -764,6 +769,7 @@
         document.querySelector("#progressBar").style.width = `${(passed / required.length) * 100}%`;
         document.querySelector("#policySummary").textContent =
           `${state.policies.windows === "signed" ? "Signed Windows" : "Documented unsigned Windows"} · ${state.policies.compatibility === "tested" ? "tested environments only" : "minimum floors claimed"} · ${state.policies.providers === "live" ? "live provider smoke required" : "provider contract tests only"}`;
+        document.querySelector('[data-action="pass-all"]').disabled = !canCollectEvidence(state);
 
         const blockers = [];
         if (!state.bunRecorded) blockers.push("No repository Bun pin is represented.");
@@ -794,7 +800,7 @@
             return `<article class="evidence-row">
               <h3>${item.title}</h3>
               <p>${item.copy}</p>
-              <button class="status ${status}" data-evidence="${key}" aria-label="${item.title}: ${statusLabel[status]}">${statusLabel[status]}</button>
+              <button class="status ${status}" data-evidence="${key}" aria-label="${item.title}: ${statusLabel[status]}" ${canCollectEvidence(state) ? "" : "disabled"}>${statusLabel[status]}</button>
             </article>`;
           })
           .join("");
