@@ -1,0 +1,29 @@
+{
+  "name": "antisprawl",
+  "type": "module",
+  "scripts": {
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "lint:staged": "lint-staged",
+    "prepare": "husky",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "verify": "bun run format:check && bun run lint && bun run typecheck && bun run test"
+  },
+  "dependencies": {
+    "effect": "^4.0.0-beta.107"
+  },
+  "devDependencies": {
+    "@oxlint/plugins": "1.83.0",
+    "@types/bun": "^1.4.2",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.5.1",
+    "oxfmt": "^0.68.0",
+    "oxlint": "^1.83.0",
+    "oxlint-tsgolint": "^7.0.2001",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  }
+}
