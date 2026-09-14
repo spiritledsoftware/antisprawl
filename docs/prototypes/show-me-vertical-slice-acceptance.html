@@ -1,0 +1,650 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>What issue #9 is trying to prove</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --page: #eef3f9;
+        --paper: #ffffff;
+        --ink: #172234;
+        --muted: #586579;
+        --line: #c7d1df;
+        --blue: #2159d1;
+        --blue-soft: #e3ebfc;
+        --green: #17643a;
+        --green-soft: #e3f3e8;
+        --red: #a52a2a;
+        --red-soft: #fae6e3;
+        --amber: #765100;
+        --amber-soft: #f6edc9;
+        --shadow: 0 14px 34px rgba(23, 34, 52, 0.1);
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        background: var(--page);
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: var(--page);
+        line-height: 1.5;
+      }
+
+      ::selection {
+        color: #fff;
+        background: var(--blue);
+      }
+
+      :focus-visible {
+        outline: 3px solid #a337ee;
+        outline-offset: 3px;
+      }
+
+      main {
+        width: min(1080px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 52px 0 72px;
+      }
+
+      header {
+        max-width: 72ch;
+        margin-bottom: 46px;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        max-width: 16ch;
+        margin-bottom: 16px;
+        font-size: clamp(2.6rem, 7vw, 5.4rem);
+        line-height: 0.96;
+        letter-spacing: -0.035em;
+        text-wrap: balance;
+      }
+
+      h2 {
+        margin-bottom: 10px;
+        font-size: clamp(1.55rem, 3.2vw, 2.25rem);
+        line-height: 1.15;
+        letter-spacing: -0.025em;
+      }
+
+      h3 {
+        margin-bottom: 6px;
+        font-size: 1rem;
+      }
+
+      .lede {
+        max-width: 66ch;
+        margin-bottom: 18px;
+        color: var(--muted);
+        font-size: 1.08rem;
+      }
+
+      .plain-answer {
+        max-width: 67ch;
+        padding: 16px 18px;
+        color: var(--blue);
+        background: var(--blue-soft);
+        border-radius: 14px;
+        font-weight: 720;
+      }
+
+      section {
+        margin-top: 52px;
+      }
+
+      .section-copy {
+        max-width: 68ch;
+        margin-bottom: 22px;
+        color: var(--muted);
+      }
+
+      .story {
+        overflow: hidden;
+        background: var(--paper);
+        border-radius: 16px;
+        box-shadow: var(--shadow);
+      }
+
+      .story-step {
+        display: grid;
+        grid-template-columns: 160px minmax(0, 1fr);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .story-step:last-child {
+        border-bottom: 0;
+      }
+
+      .step-label {
+        padding: 22px;
+        color: #fff;
+        background: var(--ink);
+        font-size: 0.78rem;
+        font-weight: 780;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .step-body {
+        padding: 22px 24px;
+      }
+
+      .code-line {
+        display: grid;
+        grid-template-columns: 92px minmax(0, 1fr);
+        gap: 12px;
+        align-items: start;
+        padding: 10px 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .code-line:first-child {
+        border-top: 0;
+      }
+
+      code {
+        color: var(--ink);
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 0.88em;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .badge {
+        display: inline-flex;
+        justify-content: center;
+        padding: 4px 8px;
+        border-radius: 999px;
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.035em;
+        text-transform: uppercase;
+      }
+
+      .badge.warn {
+        color: var(--red);
+        background: var(--red-soft);
+      }
+      .badge.quiet {
+        color: var(--green);
+        background: var(--green-soft);
+      }
+      .badge.fact {
+        color: var(--blue);
+        background: var(--blue-soft);
+      }
+
+      .result-band {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 18px;
+        align-items: center;
+        padding: 20px 24px;
+        color: #fff;
+        background: var(--green);
+      }
+
+      .result-number {
+        font-size: 2.8rem;
+        font-weight: 820;
+        line-height: 1;
+      }
+
+      .result-band p {
+        margin: 0;
+      }
+
+      .abuse-list {
+        overflow: hidden;
+        margin: 0;
+        padding: 0;
+        background: var(--paper);
+        border-radius: 16px;
+        box-shadow: var(--shadow);
+        list-style: none;
+      }
+
+      .abuse-list li {
+        display: grid;
+        grid-template-columns: minmax(190px, 0.65fr) 28px minmax(0, 1.35fr);
+        gap: 16px;
+        align-items: center;
+        padding: 18px 22px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .abuse-list li:last-child {
+        border-bottom: 0;
+      }
+
+      .action {
+        font-weight: 760;
+      }
+      .arrow {
+        position: relative;
+        display: block;
+        width: 24px;
+        height: 24px;
+        color: var(--blue);
+      }
+
+      .arrow::before {
+        position: absolute;
+        top: 11px;
+        left: 2px;
+        width: 17px;
+        height: 2px;
+        content: "";
+        background: currentColor;
+      }
+
+      .arrow::after {
+        position: absolute;
+        top: 7px;
+        right: 3px;
+        width: 8px;
+        height: 8px;
+        content: "";
+        border-top: 2px solid currentColor;
+        border-right: 2px solid currentColor;
+        transform: rotate(45deg);
+      }
+      .expected {
+        color: var(--muted);
+      }
+
+      .dimension-flow {
+        display: grid;
+        grid-template-columns: minmax(170px, 0.7fr) 36px minmax(0, 1fr);
+        gap: 18px;
+        align-items: center;
+        padding: 24px;
+        background: var(--paper);
+        border-radius: 16px;
+        box-shadow: var(--shadow);
+      }
+
+      .fixture-box {
+        padding: 18px;
+        color: #fff;
+        background: var(--ink);
+        border-radius: 12px;
+      }
+
+      .fixture-box strong,
+      .profile strong {
+        display: block;
+      }
+      .fixture-box small {
+        color: #c8d2df;
+      }
+
+      .profile-stack {
+        display: grid;
+        gap: 10px;
+      }
+
+      .profile {
+        display: grid;
+        grid-template-columns: 80px minmax(0, 1fr);
+        gap: 14px;
+        align-items: center;
+        padding: 14px 16px;
+        background: var(--blue-soft);
+        border-radius: 12px;
+      }
+
+      .profile strong {
+        color: var(--blue);
+        font-size: 1.2rem;
+      }
+
+      .decision-rule {
+        margin: 18px 0 0;
+        color: var(--muted);
+      }
+
+      .decision-rule b {
+        color: var(--ink);
+      }
+
+      .gate {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        overflow: hidden;
+        background: var(--paper);
+        border-radius: 16px;
+        box-shadow: var(--shadow);
+      }
+
+      .gate-side {
+        padding: 24px;
+      }
+      .gate-side:first-child {
+        border-right: 1px solid var(--line);
+      }
+
+      .gate h3 {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 1.1rem;
+      }
+
+      .gate h3::before {
+        display: block;
+        width: 10px;
+        height: 10px;
+        content: "";
+        border-radius: 50%;
+        background: currentColor;
+      }
+
+      .accept h3 {
+        color: var(--green);
+      }
+      .reject h3 {
+        color: var(--red);
+      }
+
+      .gate ul {
+        margin: 14px 0 0;
+        padding-left: 20px;
+      }
+
+      .gate li {
+        margin: 7px 0;
+      }
+
+      .not-deciding {
+        max-width: 70ch;
+        margin-top: 22px;
+        padding: 18px 20px;
+        color: var(--amber);
+        background: var(--amber-soft);
+        border-radius: 14px;
+      }
+
+      footer {
+        max-width: 68ch;
+        margin-top: 52px;
+        color: var(--muted);
+        font-size: 0.84rem;
+      }
+
+      @media (max-width: 700px) {
+        main {
+          width: min(100% - 22px, 560px);
+          padding-top: 30px;
+        }
+        h1 {
+          font-size: 2.7rem;
+        }
+        .story-step {
+          grid-template-columns: 1fr;
+        }
+        .step-label {
+          padding: 12px 16px;
+        }
+        .step-body {
+          padding: 18px 16px;
+        }
+        .code-line {
+          grid-template-columns: 80px minmax(0, 1fr);
+        }
+        .abuse-list li {
+          grid-template-columns: 1fr;
+          gap: 5px;
+        }
+        .arrow {
+          transform: rotate(90deg);
+          transform-origin: left center;
+        }
+        .dimension-flow {
+          grid-template-columns: 1fr;
+        }
+        .dimension-flow > .arrow {
+          transform: rotate(90deg);
+        }
+        .gate {
+          grid-template-columns: 1fr;
+        }
+        .gate-side:first-child {
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>What issue #9 is trying to prove</h1>
+        <p class="lede">
+          Before building Antisprawl, we need a small set of examples that tells us whether the
+          first end-to-end version is useful and honest.
+        </p>
+        <p class="plain-answer">
+          The core test is simple: add four functions, then demand exactly two Findings—not zero,
+          not four.
+        </p>
+      </header>
+
+      <section aria-labelledby="signal-title">
+        <h2 id="signal-title">The core signal test</h2>
+        <p class="section-copy">
+          Start with one existing function. An Edit batch adds four more. Two are useful reuse
+          opportunities; two should stay quiet.
+        </p>
+
+        <div class="story">
+          <div class="story-step">
+            <div class="step-label">Before the edit</div>
+            <div class="step-body">
+              <h3>One existing Candidate symbol</h3>
+              <code>collectReadyJobs(jobs)</code>
+              <p class="section-copy">
+                A meaningful-size loop that collects jobs which are ready and not cancelled.
+              </p>
+            </div>
+          </div>
+
+          <div class="story-step">
+            <div class="step-label">Agent adds</div>
+            <div class="step-body">
+              <div class="code-line">
+                <span class="badge warn">Finding</span>
+                <div>
+                  <strong><code>listEligibleJobs(workItems)</code></strong
+                  ><br />Same logic with renamed identifiers.
+                </div>
+              </div>
+              <div class="code-line">
+                <span class="badge warn">Finding</span>
+                <div>
+                  <strong><code>gatherRunnableJobs(workItems)</code></strong
+                  ><br />Same meaningful-size loop with one extra <code>paused</code> guard.
+                </div>
+              </div>
+              <div class="code-line">
+                <span class="badge quiet">Quiet</span>
+                <div>
+                  <strong><code>collectOverdueInvoices(invoices)</code></strong
+                  ><br />Similar loop shape, different business responsibility.
+                </div>
+              </div>
+              <div class="code-line">
+                <span class="badge quiet">Quiet</span>
+                <div>
+                  <strong><code>isReady(job)</code></strong
+                  ><br />A tiny wrapper below the Meaningful-size policy.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="result-band">
+            <div class="result-number">2</div>
+            <p>
+              <strong>Expected result:</strong> the renamed copy ranks first, the small-edit near
+              miss ranks second, and both negatives remain absent.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="abuse-title">
+        <h2 id="abuse-title">Then try to break it</h2>
+        <p class="section-copy">
+          The signal alone is not enough. The slice also fails if it leaves stale data behind or
+          hides what went wrong.
+        </p>
+        <ul class="abuse-list">
+          <li>
+            <span class="action">Rewrite the copied function</span>
+            <span class="arrow" aria-hidden="true"></span>
+            <span class="expected"
+              >Its old Finding disappears; the unchanged near-miss still appears in manual
+              output.</span
+            >
+          </li>
+          <li>
+            <span class="action">Interrupt indexing after one completed provider batch</span>
+            <span class="arrow" aria-hidden="true"></span>
+            <span class="expected"
+              >The Index stays readable and resumes only the missing content hashes.</span
+            >
+          </li>
+          <li>
+            <span class="action">Make <code>listEligibleJobs</code> unparsable</span>
+            <span class="arrow" aria-hidden="true"></span>
+            <span class="expected"
+              >Its stale Finding is excluded; unaffected results remain; Coverage says
+              <code>degraded</code>.</span
+            >
+          </li>
+          <li>
+            <span class="action">Fail Codex authentication, transport, or response validation</span>
+            <span class="arrow" aria-hidden="true"></span>
+            <span class="expected"
+              >A typed diagnostic appears and Structural-only analysis runs without stale Semantic
+              evidence.</span
+            >
+          </li>
+          <li>
+            <span class="action">Fail sqlite-vec after recording a native semantic result</span>
+            <span class="arrow" aria-hidden="true"></span>
+            <span class="expected"
+              >Application exact search returns the same candidates and Findings over the same
+              vector BLOBs.</span
+            >
+          </li>
+          <li>
+            <span class="action">Give invalid configuration or an unsafe Index operation</span>
+            <span class="arrow" aria-hidden="true"></span>
+            <span class="expected"
+              >The command fails clearly and leaves the existing Index unchanged.</span
+            >
+          </li>
+        </ul>
+      </section>
+
+      <section aria-labelledby="dimension-title">
+        <h2 id="dimension-title">Compare dimensions without guessing</h2>
+        <p class="section-copy">
+          Run the unchanged fixture once at each dimension with explicit Source egress. CI
+          separately uses a deterministic provider double for batching and failure behavior.
+        </p>
+        <div class="dimension-flow">
+          <div class="fixture-box">
+            <strong>Same frozen fixture</strong>
+            <small>2 positives · 2 negatives</small>
+          </div>
+          <div class="arrow" aria-hidden="true"></div>
+          <div class="profile-stack">
+            <div class="profile">
+              <strong>384</strong>
+              <span
+                >Does it find both positives, reject both negatives, and return valid
+                provenance?</span
+              >
+            </div>
+            <div class="profile">
+              <strong>1536</strong>
+              <span>Run exactly the same gate and record quality, latency, and usage.</span>
+            </div>
+          </div>
+        </div>
+        <p class="decision-rule">
+          <b>Decision rule:</b> choose 384 if it passes; otherwise choose 1536 only if it passes. If
+          neither passes, reject the semantic slice rather than changing the expected answers after
+          seeing the scores.
+        </p>
+      </section>
+
+      <section aria-labelledby="gate-title">
+        <h2 id="gate-title">The actual decision</h2>
+        <p class="section-copy">
+          This matrix is a gate for starting the build sequence. It is not a claim that four
+          functions calibrate the finished detector.
+        </p>
+        <div class="gate">
+          <div class="gate-side accept">
+            <h3>Accept the vertical slice</h3>
+            <ul>
+              <li>Exactly two correct Findings</li>
+              <li>No stale or trivial Findings</li>
+              <li>Safe interruption and resume</li>
+              <li>Honest Coverage, exit status, and fallback</li>
+              <li>Versioned JSON without source, vectors, or credentials</li>
+              <li>At least one embedding dimension passes unchanged expectations</li>
+            </ul>
+          </div>
+          <div class="gate-side reject">
+            <h3>Reject the vertical slice</h3>
+            <ul>
+              <li>Either positive is missed</li>
+              <li>Either hard negative is reported</li>
+              <li>Affected stale work survives an edit or parse failure</li>
+              <li>Resume repeats completed provider work or corrupts the Index</li>
+              <li>A fallback changes results without saying so</li>
+              <li>The protocol leaks data or hides failure</li>
+            </ul>
+          </div>
+        </div>
+
+        <p class="not-deciding">
+          <strong>Not decided here:</strong> exact thresholds, candidate counts, final calibration,
+          implementation filenames, or whether a compact <code>filter</code> rewrite is structurally
+          close enough. Those need broader evidence.
+        </p>
+      </section>
+
+      <footer>
+        If the expected “two Findings, two quiet” result and the failure behavior above match what
+        you mean by a useful first slice, issue #9 is ready to close. If not, the disagreement is
+        now one concrete example rather than an abstract test plan.
+      </footer>
+    </main>
+  </body>
+</html>
