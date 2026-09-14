@@ -445,16 +445,16 @@
           first end-to-end version is useful and honest.
         </p>
         <p class="plain-answer">
-          The core test is simple: add four functions, then demand exactly two Findings—not zero,
-          not four.
+          The core test is simple: run four isolated edits against one baseline. Two named Symbol
+          pairs must surface; two edits must stay quiet.
         </p>
       </header>
 
       <section aria-labelledby="signal-title">
         <h2 id="signal-title">The core signal test</h2>
         <p class="section-copy">
-          Start with one existing function. An Edit batch adds four more. Two are useful reuse
-          opportunities; two should stay quiet.
+          Start with one existing function, restore that baseline before each run, and add only one
+          new Symbol at a time. Isolation prevents the positive fixtures from matching each other.
         </p>
 
         <div class="story">
@@ -470,31 +470,32 @@
           </div>
 
           <div class="story-step">
-            <div class="step-label">Agent adds</div>
+            <div class="step-label">Four isolated edits</div>
             <div class="step-body">
               <div class="code-line">
-                <span class="badge warn">Finding</span>
+                <span class="badge warn">1 Finding</span>
                 <div>
-                  <strong><code>listEligibleJobs(workItems)</code></strong
-                  ><br />Same logic with renamed identifiers.
+                  <strong><code>listEligibleJobs ↔ collectReadyJobs</code></strong
+                  ><br />Same logic with renamed identifiers; this is the only added Symbol.
                 </div>
               </div>
               <div class="code-line">
-                <span class="badge warn">Finding</span>
+                <span class="badge warn">1 Finding</span>
                 <div>
-                  <strong><code>gatherRunnableJobs(workItems)</code></strong
-                  ><br />Same meaningful-size loop with one extra <code>paused</code> guard.
+                  <strong><code>gatherRunnableJobs ↔ collectReadyJobs</code></strong
+                  ><br />Same meaningful-size loop with one extra <code>paused</code> guard; tested
+                  separately from the renamed copy.
                 </div>
               </div>
               <div class="code-line">
-                <span class="badge quiet">Quiet</span>
+                <span class="badge quiet">0 Findings</span>
                 <div>
                   <strong><code>collectOverdueInvoices(invoices)</code></strong
                   ><br />Similar loop shape, different business responsibility.
                 </div>
               </div>
               <div class="code-line">
-                <span class="badge quiet">Quiet</span>
+                <span class="badge quiet">0 Findings</span>
                 <div>
                   <strong><code>isReady(job)</code></strong
                   ><br />A tiny wrapper below the Meaningful-size policy.
@@ -504,10 +505,11 @@
           </div>
 
           <div class="result-band">
-            <div class="result-number">2</div>
+            <div class="result-number">4</div>
             <p>
-              <strong>Expected result:</strong> the renamed copy ranks first, the small-edit near
-              miss ranks second, and both negatives remain absent.
+              <strong>Expected result across four isolated runs:</strong> each positive produces its
+              one specified pair; each negative produces none. There is no positive-to-positive pair
+              because those Symbols never share an Edit batch.
             </p>
           </div>
         </div>
@@ -578,15 +580,15 @@
         <div class="dimension-flow">
           <div class="fixture-box">
             <strong>Same frozen fixture</strong>
-            <small>2 positives · 2 negatives</small>
+            <small>4 isolated cases · 2 required pairs · 2 required absences</small>
           </div>
           <div class="arrow" aria-hidden="true"></div>
           <div class="profile-stack">
             <div class="profile">
               <strong>384</strong>
               <span
-                >Does it find both positives, reject both negatives, and return valid
-                provenance?</span
+                >Does it return both specified pairs, preserve both required absences, and report
+                valid provenance?</span
               >
             </div>
             <div class="profile">
@@ -612,7 +614,7 @@
           <div class="gate-side accept">
             <h3>Accept the vertical slice</h3>
             <ul>
-              <li>Exactly two correct Findings</li>
+              <li>Each isolated positive returns its specified Symbol pair</li>
               <li>No stale or trivial Findings</li>
               <li>Safe interruption and resume</li>
               <li>Honest Coverage, exit status, and fallback</li>
@@ -623,8 +625,8 @@
           <div class="gate-side reject">
             <h3>Reject the vertical slice</h3>
             <ul>
-              <li>Either positive is missed</li>
-              <li>Either hard negative is reported</li>
+              <li>Either specified positive pair is missed or an unlisted pair appears</li>
+              <li>Either isolated negative produces a Finding</li>
               <li>Affected stale work survives an edit or parse failure</li>
               <li>Resume repeats completed provider work or corrupts the Index</li>
               <li>A fallback changes results without saying so</li>
@@ -641,9 +643,9 @@
       </section>
 
       <footer>
-        If the expected “two Findings, two quiet” result and the failure behavior above match what
-        you mean by a useful first slice, issue #9 is ready to close. If not, the disagreement is
-        now one concrete example rather than an abstract test plan.
+        If the two required pairs, two required absences, and failure behavior above match what you
+        mean by a useful first slice, issue #9 is ready to close. If not, the disagreement is now
+        one concrete example rather than an abstract test plan.
       </footer>
     </main>
   </body>
