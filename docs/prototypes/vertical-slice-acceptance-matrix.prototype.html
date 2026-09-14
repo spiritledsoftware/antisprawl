@@ -1,0 +1,1537 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Antisprawl vertical-slice acceptance matrix — prototype</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --canvas: #eef3f9;
+        --surface: #ffffff;
+        --surface-muted: #e5ebf3;
+        --ink: #192333;
+        --muted: #596273;
+        --line: #c3cedc;
+        --accent: #2159d1;
+        --accent-dark: #153f9b;
+        --pass: #17643a;
+        --pass-bg: #e2f4e8;
+        --fail: #a52a2a;
+        --fail-bg: #f9e5e2;
+        --warn: #755000;
+        --warn-bg: #f6edcb;
+        --focus: #ae3aff;
+        --shadow: 0 12px 30px rgba(25, 35, 51, 0.1);
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        background: var(--canvas);
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: var(--canvas);
+        line-height: 1.5;
+      }
+
+      ::selection {
+        color: #fff;
+        background: var(--accent);
+      }
+
+      :focus-visible {
+        outline: 3px solid var(--focus);
+        outline-offset: 3px;
+      }
+
+      button {
+        font: inherit;
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.46;
+      }
+
+      .shell {
+        width: min(1180px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 48px 0 80px;
+      }
+
+      header {
+        max-width: 78ch;
+        margin-bottom: 36px;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        max-width: 18ch;
+        margin-bottom: 16px;
+        font-size: clamp(2.4rem, 7vw, 5rem);
+        line-height: 0.98;
+        letter-spacing: -0.035em;
+        font-weight: 760;
+        text-wrap: balance;
+      }
+
+      h2 {
+        margin-bottom: 10px;
+        font-size: clamp(1.45rem, 3vw, 2rem);
+        line-height: 1.15;
+        letter-spacing: -0.02em;
+      }
+
+      h3 {
+        margin-bottom: 8px;
+        font-size: 1rem;
+      }
+
+      .lede {
+        max-width: 70ch;
+        margin-bottom: 18px;
+        color: var(--muted);
+        font-size: 1.08rem;
+      }
+
+      .prototype-note {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 11px;
+        color: var(--warn);
+        background: var(--warn-bg);
+        border-radius: 999px;
+        font-size: 0.82rem;
+        font-weight: 700;
+      }
+
+      .prototype-note::before {
+        width: 8px;
+        height: 8px;
+        content: "";
+        background: currentColor;
+        border-radius: 50%;
+      }
+
+      section {
+        margin-top: 48px;
+      }
+
+      .section-copy {
+        max-width: 70ch;
+        margin-bottom: 20px;
+        color: var(--muted);
+      }
+
+      .state-panel {
+        overflow: hidden;
+        background: var(--surface);
+        border-radius: 16px;
+        box-shadow: var(--shadow);
+      }
+
+      .verdict-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 22px 24px;
+        color: #fff;
+        background: var(--ink);
+      }
+
+      .verdict-row strong {
+        font-size: 1.35rem;
+        letter-spacing: -0.015em;
+      }
+
+      .verdict {
+        padding: 6px 11px;
+        border: 1px solid rgba(255, 255, 255, 0.32);
+        border-radius: 999px;
+        font-size: 0.8rem;
+        font-weight: 750;
+        letter-spacing: 0.035em;
+        text-transform: uppercase;
+      }
+
+      .verdict[data-tone="pass"] {
+        background: var(--pass);
+      }
+      .verdict[data-tone="fail"] {
+        background: var(--fail);
+      }
+      .verdict[data-tone="pending"] {
+        background: var(--warn);
+      }
+
+      .state-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        border-bottom: 1px solid var(--line);
+      }
+
+      .state-cell {
+        min-height: 94px;
+        padding: 18px 20px;
+        border-right: 1px solid var(--line);
+      }
+
+      .state-cell:last-child {
+        border-right: 0;
+      }
+
+      .state-label {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--muted);
+        font-size: 0.73rem;
+        font-weight: 750;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      .state-value {
+        display: block;
+        font-size: 1rem;
+        font-weight: 700;
+        overflow-wrap: anywhere;
+      }
+
+      .state-value[data-tone="pass"] {
+        color: var(--pass);
+      }
+      .state-value[data-tone="fail"] {
+        color: var(--fail);
+      }
+      .state-value[data-tone="warn"] {
+        color: var(--warn);
+      }
+
+      .state-detail {
+        display: grid;
+        grid-template-columns: minmax(0, 1.25fr) minmax(260px, 0.75fr);
+        gap: 0;
+      }
+
+      .findings,
+      .event-log {
+        padding: 22px 24px 24px;
+      }
+      .event-log {
+        background: #e9eef5;
+      }
+
+      .finding-list,
+      .event-list,
+      .check-list {
+        padding: 0;
+        margin: 0;
+        list-style: none;
+      }
+
+      .finding-list li {
+        display: grid;
+        grid-template-columns: 90px minmax(0, 1fr);
+        gap: 12px;
+        padding: 10px 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .finding-list li:first-child {
+        border-top: 0;
+      }
+
+      code,
+      pre,
+      .mono {
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .finding-id {
+        color: var(--accent-dark);
+        font-size: 0.78rem;
+        font-weight: 700;
+      }
+
+      .empty {
+        padding: 18px 0;
+        color: var(--muted);
+      }
+
+      .event-list {
+        display: grid;
+        gap: 8px;
+        max-height: 178px;
+        overflow: auto;
+        scrollbar-color: var(--line) transparent;
+        font-size: 0.82rem;
+      }
+
+      .event-list li {
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .event-list li:last-child {
+        border-bottom: 0;
+      }
+
+      .workbench {
+        display: grid;
+        grid-template-columns: minmax(280px, 0.78fr) minmax(0, 1.22fr);
+        gap: 24px;
+        align-items: start;
+      }
+
+      .control-panel,
+      .walkthrough-panel {
+        padding: 22px;
+        background: var(--surface);
+        border-radius: 16px;
+        box-shadow: var(--shadow);
+      }
+
+      .control-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .action-button,
+      .step-button,
+      .tab-button {
+        border: 0;
+        cursor: pointer;
+      }
+
+      .action-button,
+      .step-button {
+        min-height: 44px;
+        padding: 10px 12px;
+        color: var(--ink);
+        background: var(--surface-muted);
+        border-radius: 10px;
+        font-size: 0.85rem;
+        font-weight: 700;
+        text-align: left;
+      }
+
+      .action-button:hover:not(:disabled),
+      .step-button:hover:not(:disabled) {
+        color: #fff;
+        background: var(--accent);
+      }
+
+      .action-button.primary {
+        color: #fff;
+        background: var(--accent);
+      }
+
+      .action-button.primary:hover:not(:disabled) {
+        background: var(--accent-dark);
+      }
+
+      .control-separator {
+        height: 1px;
+        margin: 16px 0;
+        background: var(--line);
+      }
+
+      .dimension-controls {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .dimension-controls p {
+        grid-column: 1 / -1;
+        margin: 0 0 4px;
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+
+      .tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        padding-bottom: 16px;
+      }
+
+      .tab-button {
+        flex: 0 0 auto;
+        padding: 8px 12px;
+        color: var(--muted);
+        background: transparent;
+        border-bottom: 2px solid transparent;
+        font-size: 0.84rem;
+        font-weight: 750;
+      }
+
+      .tab-button[aria-selected="true"] {
+        color: var(--accent-dark);
+        border-bottom-color: var(--accent);
+      }
+
+      .walkthrough-description {
+        min-height: 48px;
+        color: var(--muted);
+      }
+
+      .steps {
+        display: grid;
+        gap: 10px;
+      }
+
+      .step-button {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr);
+        gap: 10px;
+        align-items: center;
+        width: 100%;
+      }
+
+      .step-button[data-state="done"] {
+        color: var(--pass);
+        background: var(--pass-bg);
+      }
+
+      .step-button[data-state="next"] {
+        color: #fff;
+        background: var(--accent);
+      }
+
+      .step-number {
+        display: grid;
+        width: 24px;
+        height: 24px;
+        place-items: center;
+        background: rgba(255, 255, 255, 0.7);
+        border-radius: 50%;
+        color: var(--ink);
+        font-size: 0.75rem;
+      }
+
+      .matrix-wrap {
+        padding: 8px;
+        overflow-x: auto;
+        background: var(--surface);
+        border-radius: 16px;
+        box-shadow: var(--shadow);
+        scrollbar-color: var(--line) transparent;
+      }
+
+      table {
+        width: 100%;
+        min-width: 860px;
+        border-collapse: collapse;
+        font-size: 0.88rem;
+      }
+
+      th,
+      td {
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        color: #fff;
+        background: var(--ink);
+        font-size: 0.72rem;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      tr:last-child td {
+        border-bottom: 0;
+      }
+      tbody tr:hover {
+        background: #f3f6fa;
+      }
+
+      .case-name {
+        display: block;
+        margin-bottom: 6px;
+        font-weight: 750;
+      }
+
+      .status-chip {
+        display: inline-flex;
+        padding: 3px 8px;
+        border-radius: 999px;
+        font-size: 0.72rem;
+        font-weight: 750;
+        text-transform: uppercase;
+      }
+
+      .status-chip[data-status="pass"] {
+        color: var(--pass);
+        background: var(--pass-bg);
+      }
+      .status-chip[data-status="fail"] {
+        color: var(--fail);
+        background: var(--fail-bg);
+      }
+      .status-chip[data-status="not-run"] {
+        color: var(--muted);
+        background: var(--surface-muted);
+      }
+
+      .fixture-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+      }
+
+      details {
+        overflow: hidden;
+        background: var(--surface);
+        border-radius: 14px;
+        box-shadow: var(--shadow);
+      }
+
+      summary {
+        padding: 16px 18px;
+        cursor: pointer;
+        font-weight: 750;
+      }
+
+      details p {
+        padding: 0 18px;
+        color: var(--muted);
+        font-size: 0.88rem;
+      }
+
+      pre {
+        margin: 0;
+        padding: 18px;
+        overflow: auto;
+        color: #e9eef8;
+        background: #17202e;
+        font-size: 0.76rem;
+        line-height: 1.55;
+        scrollbar-color: #526077 transparent;
+      }
+
+      .policy-note {
+        max-width: 72ch;
+        padding: 20px 22px;
+        color: var(--accent-dark);
+        background: #e5ecfc;
+        border-radius: 14px;
+      }
+
+      .policy-note strong {
+        display: block;
+        margin-bottom: 6px;
+      }
+
+      footer {
+        max-width: 70ch;
+        margin-top: 52px;
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+
+      @media (max-width: 840px) {
+        .shell {
+          width: min(100% - 22px, 720px);
+          padding-top: 28px;
+        }
+        .state-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .state-cell:nth-child(2) {
+          border-right: 0;
+        }
+        .state-cell:nth-child(-n + 2) {
+          border-bottom: 1px solid var(--line);
+        }
+        .state-detail,
+        .workbench {
+          grid-template-columns: 1fr;
+        }
+        .fixture-grid {
+          grid-template-columns: 1fr;
+        }
+        .event-log {
+          border-top: 1px solid var(--line);
+        }
+      }
+
+      @media (max-width: 500px) {
+        h1 {
+          font-size: 2.45rem;
+        }
+        .state-grid,
+        .control-grid,
+        .dimension-controls {
+          grid-template-columns: 1fr;
+        }
+        .state-cell {
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+        .state-cell:last-child {
+          border-bottom: 0;
+        }
+        .dimension-controls p {
+          grid-column: auto;
+        }
+        .verdict-row,
+        .findings,
+        .event-log,
+        .control-panel,
+        .walkthrough-panel {
+          padding-left: 16px;
+          padding-right: 16px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <header>
+        <h1>What must the vertical slice prove?</h1>
+        <p class="lede">
+          This throwaway demo tests the acceptance model for Antisprawl’s TypeScript vertical slice:
+          enough signal, little noise, current state after edits, safe interruption, honest failure,
+          stable protocol, and an evidence-led embedding dimension choice.
+        </p>
+        <span class="prototype-note"
+          >Prototype only — it simulates observations; it does not run Antisprawl</span
+        >
+      </header>
+
+      <section aria-labelledby="current-state-title">
+        <h2 id="current-state-title">Current simulated run</h2>
+        <p class="section-copy">
+          Use free play or start a walkthrough. Every action passes through a pure state reducer and
+          exposes the full contract state.
+        </p>
+        <div class="state-panel" aria-live="polite">
+          <div class="verdict-row">
+            <strong id="last-observation">No command has run.</strong>
+            <span class="verdict" id="verdict" data-tone="pending">Matrix not exercised</span>
+          </div>
+          <div class="state-grid">
+            <div class="state-cell">
+              <span class="state-label">Coverage</span>
+              <span class="state-value" id="coverage">stale</span>
+            </div>
+            <div class="state-cell">
+              <span class="state-label">Active analysis</span>
+              <span class="state-value" id="analysis-mode">Structural-only</span>
+            </div>
+            <div class="state-cell">
+              <span class="state-label">Vector search</span>
+              <span class="state-value" id="vector-search">Not used</span>
+            </div>
+            <div class="state-cell">
+              <span class="state-label">Last exit</span>
+              <span class="state-value mono" id="exit-code">—</span>
+            </div>
+          </div>
+          <div class="state-detail">
+            <div class="findings">
+              <h3>Current Findings</h3>
+              <ul class="finding-list" id="finding-list"></ul>
+            </div>
+            <div class="event-log">
+              <h3>Recent observations</h3>
+              <ol
+                class="event-list"
+                id="event-list"
+                tabindex="0"
+                aria-label="Recent observations"
+              ></ol>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="exercise-title">
+        <h2 id="exercise-title">Exercise the contract</h2>
+        <p class="section-copy">
+          Free play lets you take awkward paths. Walkthroughs reset to a known state and focus
+          attention on one acceptance question.
+        </p>
+        <div class="workbench">
+          <div class="control-panel">
+            <h3>Free play</h3>
+            <div class="control-grid" id="free-play-controls"></div>
+            <div class="control-separator"></div>
+            <div class="dimension-controls">
+              <p>
+                Record observed live-profile outcomes. “Pass” means both positives found, both
+                negatives rejected, and dimension/provenance validated.
+              </p>
+              <button class="action-button" data-action="DIMENSION_384_PASS">384 passes</button>
+              <button class="action-button" data-action="DIMENSION_384_FAIL">384 fails</button>
+              <button class="action-button" data-action="DIMENSION_1536_PASS">1536 passes</button>
+              <button class="action-button" data-action="DIMENSION_1536_FAIL">1536 fails</button>
+            </div>
+          </div>
+
+          <div class="walkthrough-panel">
+            <div
+              class="tabs"
+              role="tablist"
+              aria-label="Guided acceptance walkthroughs"
+              id="walkthrough-tabs"
+            ></div>
+            <div id="walkthrough-content" role="tabpanel"></div>
+          </div>
+        </div>
+      </section>
+
+      <section aria-labelledby="matrix-title">
+        <h2 id="matrix-title">Proposed acceptance matrix</h2>
+        <p class="section-copy">
+          A row passes only from the listed public observation. Thresholds and candidate counts stay
+          outside this prototype; the corpus tells later calibration what the detector must
+          separate.
+        </p>
+        <div
+          class="matrix-wrap"
+          role="region"
+          tabindex="0"
+          aria-label="Scrollable acceptance matrix"
+        >
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Case</th>
+                <th scope="col">Action</th>
+                <th scope="col">Accept</th>
+                <th scope="col">Owning lane</th>
+                <th scope="col">Status</th>
+              </tr>
+            </thead>
+            <tbody id="matrix-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section aria-labelledby="fixtures-title">
+        <h2 id="fixtures-title">The two-file signal corpus</h2>
+        <p class="section-copy">
+          One baseline candidate and one edit batch carry the positive and negative cases. The
+          near-miss keeps the same meaningful-size loop and adds a small guard; a compact
+          <code>filter</code> rewrite is exploratory, not a required structural positive.
+        </p>
+        <div class="fixture-grid">
+          <details open>
+            <summary><code>src/candidate.ts</code> — existing Symbol</summary>
+            <p>Indexed before the edit. This is the Candidate symbol for both expected Findings.</p>
+            <pre tabindex="0"><code>export function collectReadyJobs(jobs: Job[]): Job[] {
+  const ready: Job[] = [];
+  for (const job of jobs) {
+    if (job.status !== "ready") continue;
+    if (job.cancelledAt !== null) continue;
+    ready.push(job);
+  }
+  return ready;
+}</code></pre>
+          </details>
+
+          <details open>
+            <summary><code>src/edited.ts</code> — one Edit batch</summary>
+            <p>
+              The exact copy and small-edit near miss should surface. The unrelated same-shape
+              collector and tiny wrapper should not.
+            </p>
+            <pre tabindex="0"><code>export function listEligibleJobs(workItems: Job[]): Job[] {
+  const eligibleJobs: Job[] = [];
+  for (const item of workItems) {
+    if (item.status !== "ready") continue;
+    if (item.cancelledAt !== null) continue;
+    eligibleJobs.push(item);
+  }
+  return eligibleJobs;
+}
+
+export function gatherRunnableJobs(workItems: Job[]): Job[] {
+  const runnableJobs: Job[] = [];
+  for (const item of workItems) {
+    if (item.status !== "ready") continue;
+    if (item.cancelledAt != null) continue;
+    if (item.paused) continue;
+    runnableJobs.push(item);
+  }
+  return runnableJobs;
+}
+
+export function collectOverdueInvoices(
+  invoices: Invoice[], today: number,
+): Invoice[] {
+  const overdue: Invoice[] = [];
+  for (const invoice of invoices) {
+    if (invoice.status !== "open") continue;
+    if (invoice.dueAt &gt;= today) continue;
+    overdue.push(invoice);
+  }
+  return overdue;
+}
+
+export const isReady = (job: Job) =&gt;
+  job.status === "ready";</code></pre>
+          </details>
+        </div>
+      </section>
+
+      <section aria-labelledby="dimension-title">
+        <h2 id="dimension-title">Dimension decision rule</h2>
+        <div class="policy-note">
+          <strong id="dimension-decision">Run both profiles against the same frozen corpus.</strong>
+          <span
+            >CI uses a deterministic provider double for batching, dimensions, validation, and
+            fallback. One explicit Source-egress run exercises real Codex OAuth at 384 and 1536
+            dimensions before accepting the slice. If 384 passes the fixed cases, prefer it;
+            otherwise use 1536 only if it passes. If neither passes, reject the semantic slice
+            rather than tune expectations after seeing the result.</span
+          >
+        </div>
+      </section>
+
+      <footer>
+        Prototype question: are these cases sufficient to reject a vertical slice that misses a real
+        clone, reports an attractive false positive, reuses stale work, corrupts resumability, lies
+        about fallback, leaks private data, or chooses dimensions without comparative evidence?
+      </footer>
+    </main>
+
+    <script>
+      const AcceptanceModel = (() => {
+        const CASES = [
+          {
+            id: "baseline",
+            name: "Structural baseline",
+            action: "Index the baseline Project without embeddings.",
+            accept:
+              "Exit 0; complete Coverage; no Findings; pinned parser/query and representation provenance; no vectors required.",
+            lane: "Bun source + compiled CLI",
+          },
+          {
+            id: "signal",
+            name: "Signal and hard negatives",
+            action: "Add the four Symbols in edited.ts, then check that path.",
+            accept:
+              "Exactly two Findings: renamed copy first, small-edit near miss second. No overdue-invoice or tiny-wrapper Finding. Repeat output keeps IDs and order stable.",
+            lane: "Shared case: Bun + compiled",
+          },
+          {
+            id: "edit",
+            name: "Content-hash currentness",
+            action: "Rewrite the renamed copy to unrelated logic, check, then restore it.",
+            accept:
+              "Old Finding disappears; unchanged near-miss still appears in manual output; no stale vector is reused; restoring the same named pair restores its stable Finding ID.",
+            lane: "Shared case: Bun + compiled",
+          },
+          {
+            id: "interruption",
+            name: "Interrupted indexing",
+            action: "Interrupt after one controlled provider batch, inspect, then resume.",
+            accept:
+              "Exit 130; valid SQLite; partial Coverage; only complete batches durable. Resume embeds only missing hashes and finishes identically to a clean index.",
+            lane: "Bun integration + compiled smoke",
+          },
+          {
+            id: "codexFallback",
+            name: "Codex failure",
+            action: "Fail auth, transport, or response validation during check.",
+            accept:
+              "Exit 0 with one typed diagnostic; Structural-only analysis runs; no stale Semantic evidence; source Coverage is unchanged.",
+            lane: "Provider double + one live smoke",
+          },
+          {
+            id: "nativeFallback",
+            name: "Native vector fallback",
+            action: "Force sqlite-vec verification, extraction, load, or probe failure.",
+            accept:
+              "After recording the native result, application exact scan over the same BLOBs preserves candidates, Findings, IDs, Coverage, and Semantic analysis without reindex.",
+            lane: "Bun native + target artifacts",
+          },
+          {
+            id: "protocol",
+            name: "Protocol and mutation safety",
+            action:
+              "Exercise successful commands, parse failure, invalid configuration, and Index-open failure.",
+            accept:
+              "Versioned JSON; correct exit policy; Coverage/diagnostics/provenance present; stderr human-only; no source, vectors, credentials, or mutation after rejected input.",
+            lane: "Compiled black box",
+          },
+          {
+            id: "dimensions",
+            name: "384 versus 1536",
+            action: "Run both profiles on the unchanged corpus with explicit Source egress.",
+            accept:
+              "Each passing profile finds both positives, rejects both negatives, validates vector length/provenance, and records usage/latency. Choose the lowest passing dimension.",
+            lane: "Opt-in live comparison",
+          },
+        ];
+
+        const FINDINGS = {
+          exact: {
+            id: "pd-ts-ready-01",
+            label: "listEligibleJobs ↔ collectReadyJobs",
+            evidence: "renamed Type-2 copy",
+          },
+          near: {
+            id: "pd-ts-ready-02",
+            label: "gatherRunnableJobs ↔ collectReadyJobs",
+            evidence: "small-edit Type-3 near miss",
+          },
+        };
+
+        const freshCases = () => Object.fromEntries(CASES.map(({ id }) => [id, "not-run"]));
+
+        const initialState = () => ({
+          indexed: false,
+          corpus: "baseline",
+          exactBody: "duplicate",
+          coverage: "stale",
+          configuredProfile: "structural-only",
+          analysisMode: "structural-only",
+          vectorSearch: "not used",
+          exitCode: null,
+          findings: [],
+          indexRevision: "none",
+          batches: { committed: 0, total: 3 },
+          interrupted: false,
+          nativeBaseline: null,
+          signalSnapshot: null,
+          protocolChecks: { success: false, parse: false, invalid: false, index: false },
+          dimensions: { 384: "not-run", 1536: "not-run" },
+          cases: freshCases(),
+          lastObservation: "No command has run.",
+          events: ["Ready. The Index has not been established."],
+        });
+
+        const addEvent = (state, message) => ({
+          ...state,
+          lastObservation: message,
+          events: [message, ...state.events].slice(0, 8),
+        });
+
+        const mark = (state, id, status = "pass") => ({
+          ...state,
+          cases: { ...state.cases, [id]: status },
+        });
+
+        const recordProtocol = (state, key) => {
+          const protocolChecks = { ...state.protocolChecks, [key]: true };
+          const next = { ...state, protocolChecks };
+          return Object.values(protocolChecks).every(Boolean) ? mark(next, "protocol") : next;
+        };
+
+        const signalFindings = (exactBody = "duplicate") => [
+          ...(exactBody === "duplicate" ? [FINDINGS.exact] : []),
+          FINDINGS.near,
+        ];
+
+        const dimensionDecision = (dimensions) => {
+          if (dimensions[384] === "not-run" || dimensions[1536] === "not-run") {
+            return "Run both profiles against the same frozen corpus.";
+          }
+          if (dimensions[384] === "pass")
+            return "384 passes: prefer 384 for the vertical-slice Profile.";
+          if (dimensions[1536] === "pass")
+            return "Only 1536 passes: use 1536 for the vertical-slice Profile.";
+          return "Neither profile passes: reject the semantic slice and investigate.";
+        };
+
+        const verdict = (state) => {
+          const statuses = Object.values(state.cases);
+          if (statuses.includes("fail")) return { label: "Reject vertical slice", tone: "fail" };
+          if (statuses.every((status) => status === "pass"))
+            return { label: "Accept vertical slice", tone: "pass" };
+          return { label: "Matrix not exercised", tone: "pending" };
+        };
+
+        const reduce = (state, action) => {
+          let next;
+          switch (action.type) {
+            case "RESET":
+              return initialState();
+            case "INDEX_STRUCTURAL":
+              next = {
+                ...state,
+                indexed: true,
+                coverage: "complete",
+                configuredProfile: "structural-only",
+                analysisMode: "structural-only",
+                vectorSearch: "not used",
+                exitCode: 0,
+                findings: [],
+                indexRevision: "baseline-a",
+                batches: { committed: 0, total: 3 },
+              };
+              return addEvent(
+                mark(next, "baseline"),
+                "index completed: baseline current, zero Findings.",
+              );
+            case "ADD_CORPUS":
+              next = {
+                ...state,
+                corpus: "edit-batch",
+                exactBody: "duplicate",
+                coverage: "stale",
+                exitCode: null,
+              };
+              return addEvent(next, "Edited path now contains two positives and two negatives.");
+            case "CHECK_CORPUS":
+              if (!state.indexed || state.corpus !== "edit-batch")
+                return addEvent(state, "Check needs an indexed baseline and the edit corpus.");
+              next = {
+                ...state,
+                coverage: "complete",
+                exitCode: 0,
+                findings: signalFindings(state.exactBody),
+                signalSnapshot: signalFindings(state.exactBody).map(({ id }) => id),
+                indexRevision: "checked-b",
+              };
+              return addEvent(
+                next,
+                "check returned two ranked Findings and rejected both negatives.",
+              );
+            case "REPEAT_CHECK": {
+              if (!state.findings.length || !state.signalSnapshot)
+                return addEvent(state, "There are no current Findings to repeat.");
+              const stable =
+                state.findings.map(({ id }) => id).join("|") === state.signalSnapshot.join("|");
+              next = { ...state, exitCode: 0 };
+              return addEvent(
+                mark(next, "signal", stable ? "pass" : "fail"),
+                stable
+                  ? "Repeat manual check preserved current Finding IDs and order."
+                  : "Repeat manual check changed Finding IDs or order; reject the slice.",
+              );
+            }
+            case "EDIT_EXACT_AWAY":
+              next = { ...state, exactBody: "unrelated", coverage: "stale", exitCode: null };
+              return addEvent(next, "The renamed copy was rewritten to unrelated logic.");
+            case "CHECK_EDIT":
+              if (state.corpus !== "edit-batch")
+                return addEvent(state, "Install the edit corpus before checking its rewrite.");
+              next = {
+                ...state,
+                coverage: "complete",
+                exitCode: 0,
+                findings: signalFindings("unrelated"),
+                indexRevision: "checked-c",
+              };
+              return addEvent(
+                next,
+                "Old Finding resolved; unchanged near-miss remains in manual output.",
+              );
+            case "RESTORE_EXACT":
+              next = { ...state, exactBody: "duplicate", coverage: "stale", exitCode: null };
+              return addEvent(
+                next,
+                "The renamed copy was restored at the same path and qualified name.",
+              );
+            case "CHECK_RESTORE":
+              next = {
+                ...state,
+                coverage: "complete",
+                exitCode: 0,
+                findings: signalFindings("duplicate"),
+                indexRevision: "checked-d",
+              };
+              return addEvent(
+                mark(next, "edit"),
+                "Restored content returned the same pair ID without stale work.",
+              );
+            case "START_CODEX_INDEX":
+              next = {
+                ...state,
+                indexed: true,
+                configuredProfile: "Codex / 384",
+                analysisMode: "Codex / 384",
+                vectorSearch: "sqlite-vec exact",
+                coverage: "partial",
+                exitCode: null,
+                findings: [],
+                batches: { committed: 0, total: 3 },
+                interrupted: false,
+                nativeBaseline: null,
+                indexRevision: "embedding-build",
+              };
+              return addEvent(
+                next,
+                "Codex indexing started with three controlled provider batches.",
+              );
+            case "COMMIT_BATCH":
+              if (state.batches.committed >= state.batches.total)
+                return addEvent(state, "All controlled batches are already committed.");
+              next = {
+                ...state,
+                batches: { ...state.batches, committed: state.batches.committed + 1 },
+                coverage:
+                  state.batches.committed + 1 === state.batches.total ? "complete" : "partial",
+              };
+              return addEvent(
+                next,
+                `Provider batch ${next.batches.committed} committed atomically.`,
+              );
+            case "INTERRUPT_INDEX":
+              if (state.batches.committed === 0)
+                return addEvent(state, "Commit one complete batch before testing interruption.");
+              next = { ...state, coverage: "partial", exitCode: 130, interrupted: true };
+              return addEvent(
+                next,
+                "SIGTERM interrupted indexing; completed batches remain readable.",
+              );
+            case "RESUME_INDEX":
+              if (!state.interrupted)
+                return addEvent(
+                  state,
+                  "Nothing is interrupted; start and interrupt Codex indexing first.",
+                );
+              next = {
+                ...state,
+                coverage: "complete",
+                exitCode: 0,
+                interrupted: false,
+                batches: { ...state.batches, committed: state.batches.total },
+                findings: signalFindings(state.exactBody),
+                indexRevision: "resumed-complete",
+              };
+              return addEvent(
+                mark(next, "interruption"),
+                "Resume requested only missing hashes and matched a clean completed Index.",
+              );
+            case "CHECK_NATIVE": {
+              if (
+                state.analysisMode !== "Codex / 384" ||
+                state.coverage !== "complete" ||
+                state.corpus !== "edit-batch"
+              )
+                return addEvent(
+                  state,
+                  "A native baseline needs complete current vectors and the edit corpus.",
+                );
+              const findings = signalFindings(state.exactBody);
+              next = {
+                ...state,
+                exitCode: 0,
+                findings,
+                vectorSearch: "sqlite-vec exact",
+                nativeBaseline: {
+                  coverage: state.coverage,
+                  analysisMode: state.analysisMode,
+                  findingIds: findings.map(({ id }) => id),
+                },
+              };
+              return addEvent(
+                next,
+                "Native vector candidates and Findings recorded for comparison.",
+              );
+            }
+            case "FAIL_CODEX":
+              next = {
+                ...state,
+                configuredProfile: "Codex / 384",
+                analysisMode: "structural-only fallback",
+                vectorSearch: "not used",
+                coverage: state.coverage === "stale" ? "complete" : state.coverage,
+                exitCode: 0,
+                findings:
+                  state.corpus === "edit-batch" ? signalFindings(state.exactBody) : state.findings,
+                nativeBaseline: null,
+              };
+              return addEvent(
+                mark(next, "codexFallback"),
+                "Codex failed: typed diagnostic emitted; no stale vectors used.",
+              );
+            case "FAIL_NATIVE": {
+              if (!state.nativeBaseline)
+                return addEvent(
+                  state,
+                  "Record a completed native semantic result before failing sqlite-vec.",
+                );
+              const findingIds = state.findings.map(({ id }) => id);
+              const unchanged =
+                state.analysisMode === state.nativeBaseline.analysisMode &&
+                state.coverage === state.nativeBaseline.coverage &&
+                findingIds.join("|") === state.nativeBaseline.findingIds.join("|");
+              next = {
+                ...state,
+                vectorSearch: "application exact scan",
+                exitCode: 0,
+              };
+              return addEvent(
+                mark(next, "nativeFallback", unchanged ? "pass" : "fail"),
+                unchanged
+                  ? "sqlite-vec failed: exact fallback retained Semantic analysis, Coverage, and Finding IDs."
+                  : "Native fallback changed an accepted semantic result; reject the slice.",
+              );
+            }
+            case "VALID_PROTOCOL":
+              next = recordProtocol(
+                {
+                  ...state,
+                  coverage: "complete",
+                  exitCode: 0,
+                  findings:
+                    state.corpus === "edit-batch"
+                      ? signalFindings(state.exactBody)
+                      : state.findings,
+                },
+                "success",
+              );
+              return addEvent(
+                next,
+                "Success emitted versioned JSON with bounded public evidence only.",
+              );
+            case "PARSE_FAILURE":
+              next = recordProtocol(
+                {
+                  ...state,
+                  coverage: "degraded",
+                  exitCode: 0,
+                  findings: state.findings.filter(({ id }) => id !== FINDINGS.exact.id),
+                  indexRevision: "parse-error-current",
+                },
+                "parse",
+              );
+              return addEvent(
+                next,
+                "Syntax error in listEligibleJobs excluded its stale Finding; the unaffected near-miss remains.",
+              );
+            case "INVALID_CONFIG":
+              next = recordProtocol({ ...state, exitCode: 1 }, "invalid");
+              return addEvent(
+                next,
+                `Invalid configuration rejected; Index revision stayed ${state.indexRevision}.`,
+              );
+            case "INDEX_FAILURE":
+              next = recordProtocol({ ...state, exitCode: 1 }, "index");
+              return addEvent(
+                next,
+                `Unsafe Index open/update failed; Index revision stayed ${state.indexRevision}.`,
+              );
+            case "DIMENSION_RESULT": {
+              const dimensions = { ...state.dimensions, [action.dimension]: action.result };
+              const complete = dimensions[384] !== "not-run" && dimensions[1536] !== "not-run";
+              const passed = dimensions[384] === "pass" || dimensions[1536] === "pass";
+              next = { ...state, dimensions };
+              if (complete) next = mark(next, "dimensions", passed ? "pass" : "fail");
+              return addEvent(
+                next,
+                `${action.dimension}-dimension live profile recorded as ${action.result}.`,
+              );
+            }
+            default:
+              return state;
+          }
+        };
+
+        return { CASES, initialState, reduce, verdict, dimensionDecision };
+      })();
+
+      (() => {
+        let state = AcceptanceModel.initialState();
+        let activeWalkthrough = 0;
+        let walkthroughStep = 0;
+
+        const freeActions = [
+          ["Reset", "RESET", "primary"],
+          ["Index structural baseline", "INDEX_STRUCTURAL"],
+          ["Install signal corpus", "ADD_CORPUS"],
+          ["Check edited path", "CHECK_CORPUS"],
+          ["Repeat manual check", "REPEAT_CHECK"],
+          ["Rewrite exact copy", "EDIT_EXACT_AWAY"],
+          ["Check rewritten path", "CHECK_EDIT"],
+          ["Restore exact copy", "RESTORE_EXACT"],
+          ["Check restored path", "CHECK_RESTORE"],
+          ["Start Codex indexing", "START_CODEX_INDEX"],
+          ["Commit one batch", "COMMIT_BATCH"],
+          ["Interrupt indexing", "INTERRUPT_INDEX"],
+          ["Resume indexing", "RESUME_INDEX"],
+          ["Record native vector result", "CHECK_NATIVE"],
+          ["Fail Codex", "FAIL_CODEX"],
+          ["Fail sqlite-vec", "FAIL_NATIVE"],
+          ["Observe valid protocol", "VALID_PROTOCOL"],
+          ["Break exact Symbol syntax", "PARSE_FAILURE"],
+          ["Reject invalid config", "INVALID_CONFIG"],
+          ["Fail Index open", "INDEX_FAILURE"],
+        ];
+
+        const walkthroughs = [
+          {
+            name: "Signal / noise",
+            description:
+              "Prove the baseline is quiet, then demand two positives while the same-shape business negative and tiny wrapper stay quiet.",
+            setup: [],
+            steps: [
+              ["Establish Structural-only baseline", "INDEX_STRUCTURAL"],
+              ["Apply the four-Symbol Edit batch", "ADD_CORPUS"],
+              ["Check the edited path", "CHECK_CORPUS"],
+              ["Repeat and inspect stable IDs/order", "REPEAT_CHECK"],
+            ],
+          },
+          {
+            name: "Edit currentness",
+            description:
+              "Start with both Findings, remove one by changing content, and verify manual output still includes the unchanged near miss.",
+            setup: ["INDEX_STRUCTURAL", "ADD_CORPUS", "CHECK_CORPUS"],
+            steps: [
+              ["Rewrite the renamed copy", "EDIT_EXACT_AWAY"],
+              ["Check only the rewritten path", "CHECK_EDIT"],
+              ["Restore the copy", "RESTORE_EXACT"],
+              ["Check and recover its stable pair ID", "CHECK_RESTORE"],
+            ],
+          },
+          {
+            name: "Interrupt / resume",
+            description:
+              "Observe the Index after a real process interruption boundary, then resume by content hash rather than starting over.",
+            setup: ["ADD_CORPUS"],
+            steps: [
+              ["Start three-batch Codex indexing", "START_CODEX_INDEX"],
+              ["Commit one complete batch", "COMMIT_BATCH"],
+              ["Deliver SIGTERM", "INTERRUPT_INDEX"],
+              ["Resume only missing work", "RESUME_INDEX"],
+            ],
+          },
+          {
+            name: "Provider failure",
+            description:
+              "A provider failure changes the active analysis to Structural-only but does not invent Semantic evidence or degrade source Coverage.",
+            setup: [
+              "INDEX_STRUCTURAL",
+              "ADD_CORPUS",
+              "START_CODEX_INDEX",
+              "COMMIT_BATCH",
+              "COMMIT_BATCH",
+              "COMMIT_BATCH",
+            ],
+            steps: [["Fail Codex during check", "FAIL_CODEX"]],
+          },
+          {
+            name: "Native fallback",
+            description:
+              "Start from a completed semantic result, record it, then prove the application exact scan preserves that result when sqlite-vec fails.",
+            setup: [
+              "ADD_CORPUS",
+              "START_CODEX_INDEX",
+              "COMMIT_BATCH",
+              "COMMIT_BATCH",
+              "COMMIT_BATCH",
+              "CHECK_NATIVE",
+            ],
+            steps: [["Force sqlite-vec failure and compare", "FAIL_NATIVE"]],
+          },
+          {
+            name: "Protocol safety",
+            description:
+              "Exercise the public success shape and each distinct failure policy while watching Coverage, exit status, and Index revision.",
+            setup: ["INDEX_STRUCTURAL", "ADD_CORPUS", "CHECK_CORPUS"],
+            steps: [
+              ["Inspect successful versioned JSON", "VALID_PROTOCOL"],
+              ["Make listEligibleJobs unparsable", "PARSE_FAILURE"],
+              ["Reject invalid configuration", "INVALID_CONFIG"],
+              ["Fail an unsafe Index open/update", "INDEX_FAILURE"],
+            ],
+          },
+          {
+            name: "Dimensions",
+            description:
+              "Record both real profile runs. The rule prefers 384 only after it passes the same fixed positives, negatives, length, and provenance checks.",
+            setup: [],
+            steps: [
+              ["Record a passing 384 run", "DIMENSION_384_PASS"],
+              ["Record a passing 1536 run", "DIMENSION_1536_PASS"],
+            ],
+          },
+        ];
+
+        const actionFromName = (name) => {
+          const match = /^DIMENSION_(384|1536)_(PASS|FAIL)$/.exec(name);
+          if (match)
+            return {
+              type: "DIMENSION_RESULT",
+              dimension: Number(match[1]),
+              result: match[2].toLowerCase(),
+            };
+          return { type: name };
+        };
+
+        const run = (name) => {
+          state = AcceptanceModel.reduce(state, actionFromName(name));
+          render();
+        };
+
+        const startWalkthrough = (index) => {
+          activeWalkthrough = index;
+          walkthroughStep = 0;
+          state = AcceptanceModel.initialState();
+          for (const action of walkthroughs[index].setup) {
+            state = AcceptanceModel.reduce(state, actionFromName(action));
+          }
+          render();
+        };
+
+        const render = () => {
+          const verdict = AcceptanceModel.verdict(state);
+          document.querySelector("#last-observation").textContent = state.lastObservation;
+          const verdictNode = document.querySelector("#verdict");
+          verdictNode.textContent = verdict.label;
+          verdictNode.dataset.tone = verdict.tone;
+
+          const coverage = document.querySelector("#coverage");
+          coverage.textContent = state.coverage;
+          coverage.dataset.tone =
+            state.coverage === "complete" ? "pass" : state.coverage === "stale" ? "fail" : "warn";
+          document.querySelector("#analysis-mode").textContent = state.analysisMode;
+          document.querySelector("#vector-search").textContent = state.vectorSearch;
+          const exitCode = document.querySelector("#exit-code");
+          exitCode.textContent = state.exitCode === null ? "—" : String(state.exitCode);
+          exitCode.dataset.tone =
+            state.exitCode === null
+              ? ""
+              : state.exitCode === 0
+                ? "pass"
+                : state.exitCode === 130
+                  ? "warn"
+                  : "fail";
+
+          const findingList = document.querySelector("#finding-list");
+          findingList.replaceChildren();
+          if (!state.findings.length) {
+            const empty = document.createElement("li");
+            empty.className = "empty";
+            empty.textContent = "No current Findings.";
+            findingList.append(empty);
+          } else {
+            for (const finding of state.findings) {
+              const item = document.createElement("li");
+              item.innerHTML = `<span class="finding-id mono"></span><span><strong></strong><br><small></small></span>`;
+              item.querySelector(".finding-id").textContent = finding.id;
+              item.querySelector("strong").textContent = finding.label;
+              item.querySelector("small").textContent = finding.evidence;
+              findingList.append(item);
+            }
+          }
+
+          const eventList = document.querySelector("#event-list");
+          eventList.replaceChildren();
+          for (const event of state.events) {
+            const item = document.createElement("li");
+            item.textContent = event;
+            eventList.append(item);
+          }
+
+          document.querySelector("#dimension-decision").textContent =
+            AcceptanceModel.dimensionDecision(state.dimensions);
+
+          const matrixBody = document.querySelector("#matrix-body");
+          matrixBody.replaceChildren();
+          for (const acceptanceCase of AcceptanceModel.CASES) {
+            const row = document.createElement("tr");
+            const status = state.cases[acceptanceCase.id];
+            row.innerHTML = `<td><span class="case-name"></span></td><td></td><td></td><td></td><td><span class="status-chip"></span></td>`;
+            row.children[0].querySelector(".case-name").textContent = acceptanceCase.name;
+            row.children[1].textContent = acceptanceCase.action;
+            row.children[2].textContent = acceptanceCase.accept;
+            row.children[3].textContent = acceptanceCase.lane;
+            const chip = row.children[4].querySelector(".status-chip");
+            chip.textContent = status;
+            chip.dataset.status = status;
+            matrixBody.append(row);
+          }
+
+          const tabs = document.querySelector("#walkthrough-tabs");
+          tabs.replaceChildren();
+          walkthroughs.forEach((walkthrough, index) => {
+            const button = document.createElement("button");
+            button.className = "tab-button";
+            button.type = "button";
+            button.role = "tab";
+            button.id = `walkthrough-tab-${index}`;
+            button.setAttribute("aria-controls", "walkthrough-content");
+            button.setAttribute("aria-selected", String(index === activeWalkthrough));
+            button.textContent = walkthrough.name;
+            button.addEventListener("click", () => startWalkthrough(index));
+            tabs.append(button);
+          });
+
+          const walkthrough = walkthroughs[activeWalkthrough];
+          const content = document.querySelector("#walkthrough-content");
+          content.setAttribute("aria-labelledby", `walkthrough-tab-${activeWalkthrough}`);
+          content.replaceChildren();
+          const description = document.createElement("p");
+          description.className = "walkthrough-description";
+          description.textContent = walkthrough.description;
+          content.append(description);
+          const steps = document.createElement("div");
+          steps.className = "steps";
+          walkthrough.steps.forEach(([label, action], index) => {
+            const button = document.createElement("button");
+            const stepState =
+              index < walkthroughStep ? "done" : index === walkthroughStep ? "next" : "waiting";
+            button.className = "step-button";
+            button.type = "button";
+            button.dataset.state = stepState;
+            button.disabled = index !== walkthroughStep;
+            button.innerHTML = `<span class="step-number"></span><span></span>`;
+            button.querySelector(".step-number").textContent = String(index + 1);
+            button.querySelector("span:last-child").textContent = label;
+            button.addEventListener("click", () => {
+              run(action);
+              walkthroughStep += 1;
+              render();
+            });
+            steps.append(button);
+          });
+          content.append(steps);
+        };
+
+        const freePlay = document.querySelector("#free-play-controls");
+        for (const [label, action, className = ""] of freeActions) {
+          const button = document.createElement("button");
+          button.className = `action-button ${className}`.trim();
+          button.type = "button";
+          button.dataset.action = action;
+          button.textContent = label;
+          freePlay.append(button);
+        }
+
+        document.addEventListener("click", (event) => {
+          const button = event.target.closest("[data-action]");
+          if (button) run(button.dataset.action);
+        });
+
+        render();
+      })();
+    </script>
+  </body>
+</html>
