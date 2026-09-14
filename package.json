@@ -1,5 +1,7 @@
 {
   "name": "antisprawl",
+  "version": "0.0.0",
+  "description": "Keep your agent from writing spaghetti code.",
   "type": "module",
   "scripts": {
     "format": "oxfmt",

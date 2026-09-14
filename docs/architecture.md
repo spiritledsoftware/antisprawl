@@ -185,11 +185,11 @@ Converts a symbol into the strict token stream, normalized structural stream, q-
 
 ### Embedding module
 
-Owns batching, provider limits, retries, cancellation, credentials, vector dimensions, and content-hash caching. OpenAI, OpenAI-compatible, and experimental Codex OAuth implementations are adapters at this seam. Structural-only mode does not instantiate an embedding adapter.
+Owns explicit provider batch limits, input estimation, retries, deadlines, cancellation, credentials, vector dimensions, and content-hash caching. Each bounded chunk calls an Effect `EmbeddingModel` adapter's `embedMany`; Antisprawl does not rely solely on an SDK's implicit batching. OpenAI, OpenAI-compatible, and experimental Codex OAuth implementations are adapters at this seam. Structural-only mode does not instantiate an embedding adapter.
 
 ### Index module
 
-Owns SQLite schema, transactions, provenance, file and symbol replacement, vector persistence, queries, partial progress, and atomic rebuilds. Storage access remains localized, but v1 does not publish a storage plug-in interface while only one implementation exists.
+Owns SQLite schema, transactions, provenance, file and symbol replacement, vector persistence, queries, partial progress, and atomic rebuilds. It uses the Effect Bun SQLite adapter internally without exposing its generic SQL interface to callers. Storage access remains localized, but v1 does not publish a storage plug-in interface while only one implementation exists.
 
 ### Detection module
 
@@ -197,9 +197,34 @@ Owns meaningful-size filtering, candidate retrieval, deterministic structural co
 
 ### Harness adapters
 
-Translate native session and hook events into CLI invocations, then translate finding JSON into model-visible context. Adapters contain no parsing, indexing, or scoring rules.
+Translate native session and hook events into CLI invocations, then translate finding JSON into model-visible context. Adapters contain no parsing, indexing, scoring rules, or Effect runtime. They remain minimal native host scripts.
 
-## 6. Language and grammar architecture
+## 6. Effect v4 beta runtime
+
+Effect v4 beta is a required runtime foundation, not an incidental dependency. Effect owns CLI orchestration, configuration decoding, filesystem and provider access, database operations, retries, concurrency, cancellation, scopes, and watcher lifecycle. Parsing, representation, similarity math, and ranking remain ordinary pure TypeScript.
+
+Every directly declared Effect-family package is pinned exactly to `4.0.0-beta.107`, and the lockfile fixes the transitive graph:
+
+| Package                    | Role                                                                |
+| -------------------------- | ------------------------------------------------------------------- |
+| `effect`                   | Core effects, Schema, Layers, scopes, schedules, and AI interfaces. |
+| `@effect/platform-bun`     | Bun platform services and `BunRuntime.runMain`.                     |
+| `@effect/sql-sqlite-bun`   | Effect SQL adapter over `bun:sqlite`, including extension loading.  |
+| `@effect/ai-openai`        | OpenAI embedding adapter.                                           |
+| `@effect/ai-openai-compat` | Generic OpenAI-compatible embedding adapter.                        |
+| `@effect/vitest`           | Effect-aware test execution and Layer lifecycle helpers.            |
+
+One `BunRuntime.runMain` entrypoint composes the process Layers. Scopes and finalizers own resources such as SQLite connections, watcher fibers, and signal-driven shutdown. `Schedule`, timeouts, and scoped fibers express retry, deadline, parallelism, and interruption policies instead of custom Promise or `AbortController` machinery.
+
+Effect `Schema` decodes untrusted configuration, CLI protocol data, provider responses, and persisted provenance. Effectful module interfaces return `Effect` with tagged expected errors. Pure modules accept already-decoded values and do not acquire services or add Effect wrappers.
+
+Unstable Effect CLI, AI, and SQL imports stay inside the executable, Embedding module, and Index module implementations respectively. Their types do not cross the external CLI JSON seam or leak into pure detector modules.
+
+Effect's structured logging and metrics feed the approved local diagnostics and bounded counters. No telemetry exporter is configured by default.
+
+Effect-family upgrades are atomic changes that run the full verification suite. Antisprawl `0.1.0` may ship on a verified beta and does not wait for Effect v4 stable.
+
+## 7. Language and grammar architecture
 
 Tree-sitter provides incremental concrete syntax trees, not a language-independent semantic model. Every supported language therefore needs a verified symbol query that maps grammar-specific nodes into the common symbol record.
 
@@ -215,15 +240,15 @@ Only a file's primary language is parsed in v1. Configured path-glob overrides r
 
 Eligible symbols are named functions, methods, and named closures/arrow functions. Enclosing class or module names are metadata, not independently embedded symbols. Whole classes, modules, arbitrary top-level chunks, and anonymous fragments are excluded.
 
-## 7. Representations and detection
+## 8. Representations and detection
 
-### 7.1 Meaningful-size gate
+### 8.1 Meaningful-size gate
 
 Small getters, wrappers, and validators often become indistinguishable after identifier and literal normalization, yet sharing them would create a worse abstraction. Antisprawl therefore extracts supported symbols but does not embed, compare, or report symbols below `minimumTokens`.
 
 The count uses comment-free canonical tokens so it is deterministic across supported languages. The shipped default is selected from the development corpus rather than guessed in this document. Lowering the threshold requires explicit indexing of newly eligible symbols; raising it only filters existing records.
 
-### 7.2 Two representations
+### 8.2 Two representations
 
 Each eligible symbol produces:
 
@@ -232,7 +257,7 @@ Each eligible symbol produces:
 
 The index stores vectors, hashes, token/q-gram fingerprints, metadata, and source ranges. It does not retain raw bodies or embedding inputs.
 
-### 7.3 Detection cascade
+### 8.3 Detection cascade
 
 For a changed-symbol batch:
 
@@ -253,7 +278,7 @@ Threshold defaults are versioned by provider, model, dimensions, language, and d
 
 Structural results are reproducible from pinned inputs. Remote providers may change a model behind a stable name, so semantic results are reproducible within the persisted vector cache but are not promised to be byte-identical after a clean remote-provider rebuild.
 
-## 8. Embedding providers
+## 9. Embedding providers
 
 V1 supports:
 
@@ -264,7 +289,7 @@ V1 supports:
 
 There is no implicit provider. `init` requires the user to select a provider or structural-only mode. Any remote provider requires confirmation before source leaves the machine, even when it has no per-call billing.
 
-The normal OpenAI and OpenAI-compatible implementations use focused Vercel AI SDK embedding adapters. Other named providers can be added in later releases without changing the CLI protocol.
+The normal OpenAI and OpenAI-compatible implementations use `@effect/ai-openai` and `@effect/ai-openai-compat`. Both satisfy Effect's `EmbeddingModel` interface with ordered batch embeddings, explicit dimensions, response validation, configurable base URLs, and usage reporting. The experimental Codex OAuth provider is a custom adapter to that same interface so its file-backed authentication and refresh behavior remain localized. Other named providers can be added later without changing the CLI protocol.
 
 ### Experimental Codex OAuth adapter
 
@@ -283,7 +308,7 @@ The vertical slice starts at 384 dimensions and compares it with 1536 dimensions
 
 Full indexing first discovers symbols and estimates input. A TTY shows the provider, model, dimensions, source-egress status, and estimated input before confirmation. Non-interactive remote indexing requires `--yes`; `--dry-run` performs no embedding calls. Hooks never start a full or newly billable backfill.
 
-## 9. Persistence and vector search
+## 10. Persistence and vector search
 
 The disposable project index lives at `.antisprawl/index.sqlite`. It stores:
 
@@ -298,7 +323,7 @@ The disposable project index lives at `.antisprawl/index.sqlite`. It stores:
 
 It stores no source, prompts, commands, transcripts, or credentials.
 
-`bun:sqlite` is the persistence implementation. Target-specific SQLite-Vector libraries are embedded in each release executable, checksum-verified, and extracted once into a private versioned cache before loading. Initial search uses deterministic `vector_full_scan`. A pure-Bun exact cosine scan over ordinary vector BLOBs is the guaranteed fallback when extension extraction or loading is unsupported.
+`@effect/sql-sqlite-bun` is the Index module's internal Effect adapter over the underlying `bun:sqlite` persistence implementation. Its `loadExtension` support loads target-specific SQLite-Vector libraries after each library is embedded in the release executable, checksum-verified, and extracted once into a private versioned cache. The adapter's generic `SqlClient` does not cross the Index module's interface; a custom direct wrapper is justified only if acceptance tests reveal a required transaction or SQLite-Vector operation the adapter cannot express. Initial search uses deterministic `vector_full_scan`. A pure-Bun exact cosine scan over ordinary vector BLOBs is the guaranteed fallback when extension extraction or loading is unsupported.
 
 Quantized search requires recall benchmarks before enablement. ANN indexes are a v1 non-goal. LanceDB, USearch, and alternate storage engines are deferred until measured scale requires them.
 
@@ -306,7 +331,7 @@ An interrupted full index commits completed provider batches and resumes by cont
 
 A configuration or schema incompatibility never triggers a surprise rebuild from a hook. The index becomes stale, and one diagnostic per session asks for an explicit `antisprawl index`. Rebuilding writes a replacement database and atomically swaps it into place only after completion.
 
-## 10. Incremental operation and concurrency
+## 11. Incremental operation and concurrency
 
 A changed-file batch follows this order:
 
@@ -319,9 +344,9 @@ A changed-file batch follows this order:
 
 Concurrent hook processes use SQLite locking with a busy timeout bounded by the hook deadline. Lock contention, provider timeout, or a stale file fails open. No hook delays the agent indefinitely.
 
-The initial hook deadline is five seconds and remains configurable. Explicit `index` and reconciliation operations have separate longer budgets.
+The initial hook deadline is five seconds and remains configurable. Explicit `index` and reconciliation operations have separate longer budgets. Effect timeouts, schedules, and scoped fibers enforce these budgets, provider retry policies, and embedding parallelism. Interruption runs registered finalizers before process exit.
 
-## 11. Watchers and reconciliation
+## 12. Watchers and reconciliation
 
 One watcher runs per project. Agent sessions attach leases; the watcher exits after the final lease disappears or an idle timeout expires. It ignores `.antisprawl/`, configured exclusions, and its own cache paths.
 
@@ -337,7 +362,7 @@ The cross-harness watcher design is documentation/source-backed and must be runt
 
 Detached shutdown is best-effort. Stale PID/lease cleanup, idle expiry, and reconciliation recover from abandoned watchers.
 
-## 12. Configuration invalidation
+## 13. Configuration invalidation
 
 | Change                                                   | Required work                                      |
 | -------------------------------------------------------- | -------------------------------------------------- |
@@ -352,7 +377,7 @@ Detached shutdown is best-effort. Stale PID/lease cleanup, idle expiry, and reco
 
 Hooks may report required work but never initiate billable backfills or full rebuilds.
 
-## 13. Failure, privacy, and trust model
+## 14. Failure, privacy, and trust model
 
 Antisprawl is a quality assistant, not an anti-tampering control. An agent with shell access can edit configuration, delete the index, or bypass hooks. Antisprawl records and reports provenance changes but does not claim to resist an adversarial agent. CI enforcement is separate future work.
 
@@ -376,7 +401,7 @@ Operational rules:
 
 Antisprawl never claims that an agent complied or reused code without deterministic evidence.
 
-## 14. Agent packaging and skills
+## 15. Agent packaging and skills
 
 The repository contains an Agent Plugins v1 manifest for portable identity and skills. Agent Plugins v1 does not standardize hooks, commands, installation, or permissions, so native overlays remain necessary:
 
@@ -384,7 +409,7 @@ The repository contains an Agent Plugins v1 manifest for portable identity and s
 - Claude uses its native plugin manifest and hook configuration.
 - Pi uses its package manifest and an extension that shells out with `child_process`.
 
-Plugin manifests own hook registration. `antisprawl init` does not rewrite a supported client's settings when its plugin is installed; it prints manual instructions when no supported plugin is detected.
+The client overlays remain Effect-free and communicate only through the compiled executable's JSON protocol. Plugin manifests own hook registration. `antisprawl init` does not rewrite a supported client's settings when its plugin is installed; it prints manual instructions when no supported plugin is detected.
 
 The plugin and executable are separate installable concerns. Hooks call `antisprawl` from `PATH` and never download an executable during an edit. Two model-invoked skills accompany the CLI:
 
@@ -395,9 +420,9 @@ The skills contain workflow and non-obvious decision rules. CLI `--help` and the
 
 No MCP server is included in v1 because it would duplicate the CLI without providing portable post-edit hooks.
 
-## 15. Build and distribution
+## 16. Build and distribution
 
-Antisprawl is implemented in TypeScript and built with a pinned Bun toolchain. `bun build --compile` produces one executable per operating-system/architecture target; there is no universal binary. Harnesses spawn the executable and never import Bun-specific code.
+Antisprawl is implemented in TypeScript on Effect `4.0.0-beta.107` and built with a pinned Bun toolchain. The process enters through `BunRuntime.runMain` from the matching `@effect/platform-bun` package. `bun build --compile` produces one executable per operating-system/architecture target; there is no universal binary. Harnesses spawn the executable and never import Bun- or Effect-specific code.
 
 Initial release targets are:
 
@@ -411,7 +436,9 @@ GitHub Releases publish checksummed standalone executables. npm provides a conve
 
 Grammar assets may be installed lazily, but pinned project assets do not update automatically. Binary and grammar provenance is visible through `status`.
 
-## 16. Verification strategy
+## 17. Verification strategy
+
+Vitest is pinned to `4.1.11`, with `@effect/vitest@4.0.0-beta.107`. Effectful module tests use `it.effect`, `it.layer`, `TestClock`, and scoped fixtures. Pure parser, fingerprinting, similarity, and ranking tests remain ordinary synchronous Vitest tests.
 
 There is no numeric public precision claim. Precision, recall, warning frequency, latency, failures, and provider usage are regression signals.
 
@@ -435,23 +462,26 @@ Use paired long-running agent tasks that preserve the agent's own workspace acro
 - Every verified language's extraction and error handling.
 - Structural-only and each shipped provider profile.
 - 384- versus 1536-dimensional vertical-slice comparison.
-- Compiled Bun execution on every target.
+- Compiled Bun execution on every target through `BunRuntime.runMain`.
+- Exact Effect-family version alignment and composed Layer startup/shutdown.
+- Effect interruption, timeout, retry, scoped-resource, and tagged-error behavior.
 - Embedded `web-tree-sitter` runtime and lazy grammar WASM loading.
-- SQLite-Vector extraction/loading and pure-Bun fallback.
+- `@effect/sql-sqlite-bun` transactions, SQLite-Vector extraction/loading, and pure-Bun fallback.
+- Effect AI OpenAI/compatible batching, dimensions, response validation, and usage reporting.
 - Pi, Claude, and Codex lifecycle, watcher, flush, and advisory delivery.
 - Interrupted indexing, concurrent hooks, stale leases, and atomic rebuilds.
 - JSON protocol and JSONC-preserving configuration edits.
 
-## 17. Delivery sequence
+## 18. Delivery sequence
 
 ### Vertical slice
 
 Build only enough to validate the core signal:
 
-- Bun CLI;
+- Bun CLI built with `effect/unstable/cli` and `BunRuntime.runMain`;
 - TypeScript symbol extraction;
-- experimental Codex OAuth with `text-embedding-3-small`;
-- `bun:sqlite` persistence and exact vector scan;
+- experimental Codex OAuth as an Effect `EmbeddingModel` adapter with `text-embedding-3-small`;
+- `@effect/sql-sqlite-bun` persistence and exact vector scan;
 - manual `index` and `check`;
 - authored clone and hard-negative fixtures;
 - dogfooding against Antisprawl's own TypeScript source.
@@ -472,7 +502,7 @@ Add:
 
 The repository remains one package with ordinary `src/`, `tests/`, `skills/`, and client-overlay directories. Platform npm packages are generated during release rather than maintained as a source monorepo.
 
-## 18. Empirical parameters
+## 19. Empirical parameters
 
 The architecture deliberately does not fix values that must come from evidence:
 
@@ -495,6 +525,8 @@ These values are versioned once selected and remain visible in configuration or 
 - [Agent Plugins specification](https://agent-plugins.org/specification)
 - [Codex hooks](https://developers.openai.com/codex/hooks)
 - [Claude Code hooks](https://code.claude.com/docs/en/hooks)
+- [Effect documentation](https://effect.website/docs/)
+- [Effect repository](https://github.com/Effect-TS/effect)
 - [Bun standalone executables](https://bun.sh/docs/bundler/executables)
 - [Bun SQLite](https://bun.sh/docs/runtime/sqlite)
 - [SQLite-Vector](https://github.com/sqliteai/sqlite-vector)
