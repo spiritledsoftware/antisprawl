@@ -1,0 +1,925 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Antisprawl v0.1.0 release proof prototype</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #172033;
+        --muted: #5e6b82;
+        --line: #d8dfeb;
+        --paper: #ffffff;
+        --canvas: #eef3f9;
+        --blue: #1859d8;
+        --blue-soft: #e7efff;
+        --green: #117442;
+        --green-soft: #e5f5ec;
+        --red: #b12931;
+        --red-soft: #fdebed;
+        --amber: #9a6200;
+        --amber-soft: #fff3ce;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: var(--canvas);
+        font:
+          16px/1.5 system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+      }
+
+      button {
+        font: inherit;
+      }
+
+      main {
+        width: min(1120px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 56px 0 80px;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        max-width: 800px;
+        margin-bottom: 12px;
+        font-size: clamp(2.4rem, 6vw, 5rem);
+        line-height: 0.98;
+        letter-spacing: -0.055em;
+      }
+
+      h2 {
+        margin-bottom: 8px;
+        font-size: 1.65rem;
+        letter-spacing: -0.025em;
+      }
+
+      .lede {
+        max-width: 760px;
+        color: var(--muted);
+        font-size: 1.08rem;
+      }
+
+      .question {
+        max-width: 820px;
+        margin: 24px 0 36px;
+        padding: 16px 18px;
+        color: #1148b3;
+        background: var(--blue-soft);
+        border-left: 4px solid var(--blue);
+        border-radius: 8px;
+        font-weight: 700;
+      }
+
+      .panel {
+        margin-top: 24px;
+        overflow: hidden;
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        box-shadow: 0 12px 32px rgba(24, 48, 88, 0.08);
+      }
+
+      .panel-head {
+        display: flex;
+        gap: 24px;
+        align-items: center;
+        justify-content: space-between;
+        padding: 22px 24px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .verdict {
+        display: inline-flex;
+        align-items: center;
+        min-height: 42px;
+        padding: 8px 14px;
+        color: var(--amber);
+        background: var(--amber-soft);
+        border-radius: 999px;
+        font-weight: 850;
+        letter-spacing: 0.04em;
+      }
+
+      .verdict.ready {
+        color: var(--green);
+        background: var(--green-soft);
+      }
+
+      .verdict.invalid {
+        color: var(--red);
+        background: var(--red-soft);
+      }
+
+      .candidate-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .candidate-grid div {
+        padding: 17px 24px;
+        border-right: 1px solid var(--line);
+      }
+
+      .candidate-grid div:last-child {
+        border-right: 0;
+      }
+
+      .candidate-grid span,
+      .mini-label {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--muted);
+        font-size: 0.75rem;
+        font-weight: 800;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+      }
+
+      .state-body {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 24px;
+        padding: 22px 24px;
+      }
+
+      .progress-track {
+        height: 10px;
+        margin: 10px 0 8px;
+        overflow: hidden;
+        background: #e7ebf2;
+        border-radius: 999px;
+      }
+
+      .progress-bar {
+        width: 0;
+        height: 100%;
+        background: var(--green);
+      }
+
+      .blockers {
+        min-height: 82px;
+        margin: 8px 0 0;
+        padding-left: 20px;
+        color: var(--muted);
+      }
+
+      section {
+        margin-top: 44px;
+      }
+
+      .section-copy {
+        max-width: 780px;
+        color: var(--muted);
+      }
+
+      .button-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 16px;
+      }
+
+      button {
+        min-height: 40px;
+        padding: 8px 13px;
+        color: var(--ink);
+        background: var(--paper);
+        border: 1px solid #bfc9da;
+        border-radius: 8px;
+        cursor: pointer;
+        font-weight: 700;
+      }
+
+      button:hover {
+        border-color: var(--blue);
+      }
+
+      button:focus-visible {
+        outline: 3px solid rgba(24, 89, 216, 0.25);
+        outline-offset: 2px;
+      }
+
+      button.primary {
+        color: white;
+        background: var(--blue);
+        border-color: var(--blue);
+      }
+
+      button.danger {
+        color: var(--red);
+        border-color: #efb9be;
+      }
+
+      .policy-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 14px;
+        margin-top: 18px;
+      }
+
+      .policy {
+        padding: 18px;
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+      }
+
+      .policy h3 {
+        margin-bottom: 6px;
+        font-size: 1rem;
+      }
+
+      .policy p {
+        min-height: 72px;
+        margin-bottom: 12px;
+        color: var(--muted);
+        font-size: 0.91rem;
+      }
+
+      .choice {
+        display: grid;
+        gap: 7px;
+      }
+
+      .choice button {
+        text-align: left;
+      }
+
+      .choice button.selected {
+        color: #1148b3;
+        background: var(--blue-soft);
+        border-color: #8bb0ff;
+      }
+
+      .evidence-list {
+        margin-top: 18px;
+        overflow: hidden;
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+      }
+
+      .evidence-row {
+        display: grid;
+        grid-template-columns: 190px 1fr auto;
+        gap: 18px;
+        align-items: center;
+        padding: 15px 18px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .evidence-row:last-child {
+        border-bottom: 0;
+      }
+
+      .evidence-row h3,
+      .evidence-row p {
+        margin: 0;
+      }
+
+      .evidence-row h3 {
+        font-size: 0.96rem;
+      }
+
+      .evidence-row p {
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      .status {
+        min-width: 88px;
+        text-align: center;
+      }
+
+      .status.pass {
+        color: var(--green);
+        background: var(--green-soft);
+        border-color: #abd8bf;
+      }
+
+      .status.fail {
+        color: var(--red);
+        background: var(--red-soft);
+        border-color: #efb9be;
+      }
+
+      .walkthrough {
+        margin-top: 18px;
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+      }
+
+      .tabs {
+        display: flex;
+        gap: 4px;
+        padding: 8px;
+        overflow-x: auto;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .tabs button {
+        white-space: nowrap;
+        border-color: transparent;
+      }
+
+      .tabs button[aria-selected="true"] {
+        color: #1148b3;
+        background: var(--blue-soft);
+      }
+
+      .scenario {
+        padding: 20px;
+      }
+
+      .scenario p {
+        color: var(--muted);
+      }
+
+      .scenario-steps {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 9px;
+      }
+
+      .scenario-steps button:disabled {
+        cursor: default;
+        opacity: 0.45;
+      }
+
+      .callout {
+        margin-top: 30px;
+        padding: 16px 18px;
+        color: #6e4c00;
+        background: var(--amber-soft);
+        border-radius: 10px;
+      }
+
+      footer {
+        max-width: 760px;
+        margin-top: 48px;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      @media (max-width: 760px) {
+        main {
+          width: min(100% - 20px, 1120px);
+          padding-top: 32px;
+        }
+
+        .panel-head,
+        .state-body {
+          display: block;
+        }
+
+        .verdict {
+          margin-top: 12px;
+        }
+
+        .candidate-grid,
+        .policy-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .candidate-grid div {
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+
+        .evidence-row {
+          grid-template-columns: 1fr;
+          gap: 8px;
+        }
+
+        .status {
+          justify-self: start;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Can this exact build ship?</h1>
+        <p class="lede">
+          This throwaway prototype tests the release-proof rule for Antisprawl v0.1.0. It does not
+          build or publish anything.
+        </p>
+        <p class="question">
+          Question: does one frozen candidate become releasable only after every promised behavior
+          passes against those exact bytes—and become blocked again when the candidate or Bun
+          version changes?
+        </p>
+      </header>
+
+      <section aria-labelledby="state-title">
+        <h2 id="state-title">Current release state</h2>
+        <div class="panel" aria-live="polite">
+          <div class="panel-head">
+            <div>
+              <span class="mini-label">Decision</span>
+              <strong id="decisionReason">Evidence is still missing.</strong>
+            </div>
+            <div id="verdict" class="verdict">BLOCKED</div>
+          </div>
+          <div class="candidate-grid">
+            <div>
+              <span>Candidate</span><strong id="candidate">Generation 1 · not frozen</strong>
+            </div>
+            <div><span>Bun</span><strong id="bunState">Exact version not recorded</strong></div>
+            <div><span>Required proof</span><strong id="progressText">0 of 0 passed</strong></div>
+          </div>
+          <div class="state-body">
+            <div>
+              <span class="mini-label">Progress</span>
+              <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
+              <small id="policySummary"></small>
+            </div>
+            <div>
+              <span class="mini-label">Blockers</span>
+              <ul id="blockers" class="blockers"></ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="button-row" role="group" aria-label="Free-play actions">
+          <button data-action="record-bun">Record exact Bun version</button>
+          <button data-action="freeze">Freeze candidate</button>
+          <button class="primary" data-action="pass-all">Pass all required proof</button>
+          <button class="danger" data-action="replace-artifact">Replace one artifact</button>
+          <button class="danger" data-action="change-bun">Change Bun version</button>
+          <button data-action="reset">Reset</button>
+        </div>
+      </section>
+
+      <section aria-labelledby="policy-title">
+        <h2 id="policy-title">Three release-policy choices</h2>
+        <p class="section-copy">
+          These choices change what “all green” means. The selected defaults are recommendations,
+          not implementation completed in this prototype.
+        </p>
+        <div class="policy-grid">
+          <article class="policy">
+            <h3>Windows signing</h3>
+            <p>Require Authenticode, or ship a checksummed unsigned binary with a clear warning?</p>
+            <div class="choice" data-policy="windows">
+              <button data-value="signed">Require signing</button>
+              <button data-value="unsigned">Allow documented unsigned release</button>
+            </div>
+          </article>
+          <article class="policy">
+            <h3>Operating-system claims</h3>
+            <p>Promise only the clean runners we test, or claim older platform minimums too?</p>
+            <div class="choice" data-policy="compatibility">
+              <button data-value="tested">Promise tested environments only</button>
+              <button data-value="floors">Promise minimum OS/runtime floors</button>
+            </div>
+          </article>
+          <article class="policy">
+            <h3>Live providers</h3>
+            <p>Require exact-candidate live smoke checks for OpenAI and experimental Codex?</p>
+            <div class="choice" data-policy="providers">
+              <button data-value="live">Require live smoke checks</button>
+              <button data-value="contract">Contract tests only</button>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section aria-labelledby="evidence-title">
+        <h2 id="evidence-title">Evidence attached to this candidate</h2>
+        <p class="section-copy">Click any status to cycle through pending, passed, and failed.</p>
+        <div id="evidence" class="evidence-list"></div>
+      </section>
+
+      <section aria-labelledby="walkthrough-title">
+        <h2 id="walkthrough-title">Try the awkward cases</h2>
+        <div class="walkthrough">
+          <div id="tabs" class="tabs" role="tablist"></div>
+          <div class="scenario">
+            <h3 id="scenarioTitle"></h3>
+            <p id="scenarioCopy"></p>
+            <div id="scenarioSteps" class="scenario-steps"></div>
+          </div>
+        </div>
+      </section>
+
+      <p class="callout">
+        <strong>Still a planning prototype:</strong> clicking “Record exact Bun version” models a
+        future repository pin. No Bun version has been selected or added by this work.
+      </p>
+
+      <footer>
+        The release proof is deliberately binary: every requirement implied by the selected policy
+        must pass against the frozen candidate. Extra claims add proof; changing the candidate or
+        Bun invalidates old evidence.
+      </footer>
+    </main>
+
+    <script>
+      const evidenceCatalog = {
+        quality: {
+          title: "Source and test lanes",
+          copy: "Format, lint, types, Vitest, bun:test, frozen lockfile, and deterministic corpus.",
+        },
+        detection: {
+          title: "Languages and detection",
+          copy: "All five language families pass positive, negative, parse-error, and ranking cases.",
+        },
+        providers: {
+          title: "Provider contracts",
+          copy: "Codex, OpenAI, and compatible adapters pass batching, validation, fallback, and provenance checks.",
+        },
+        persistence: {
+          title: "Index and vector search",
+          copy: "Transactions, resume, invalidation, sqlite-vec parity, and same-BLOB exact fallback pass.",
+        },
+        lifecycle: {
+          title: "Watchers and clients",
+          copy: "Concurrency, reconciliation, Pi, Claude, and Codex lifecycle checks remain bounded and fail open.",
+        },
+        privacy: {
+          title: "Protocol and privacy",
+          copy: "Versioned JSON, exit behavior, egress rules, and no-source/no-secret output pass.",
+        },
+        native: {
+          title: "Five native targets",
+          copy: "The exact candidates execute on both Linux targets, both macOS targets, and Windows x64.",
+        },
+        macSigning: {
+          title: "Signed and notarized macOS",
+          copy: "Both macOS candidates prove the signed/notarized executable, custom SQLite, and sqlite-vec libraries can extract and load under final hardened-runtime settings.",
+        },
+        distribution: {
+          title: "Archives and npm",
+          copy: "Checksums, archive contents, platform selection, clean installs, and no-runtime direct downloads pass.",
+        },
+        docs: {
+          title: "User-facing contract",
+          copy: "Help, schema, skills, support claims, warnings, and provenance match the candidate.",
+        },
+        windowsSigning: {
+          title: "Windows Authenticode",
+          copy: "The exact Windows candidate is signed and its signature is verified on a clean runner.",
+        },
+        compatibility: {
+          title: "Compatibility floors",
+          copy: "Every promised older OS/runtime floor is exercised rather than inferred from a current runner.",
+        },
+        liveProviders: {
+          title: "Live provider smoke",
+          copy: "The exact candidate reaches OpenAI and experimental Codex with safe authored fixtures.",
+        },
+      };
+
+      const baseEvidence = [
+        "quality",
+        "detection",
+        "providers",
+        "persistence",
+        "lifecycle",
+        "privacy",
+        "native",
+        "macSigning",
+        "distribution",
+        "docs",
+      ];
+
+      const initialState = () => ({
+        generation: 1,
+        frozen: false,
+        bunRecorded: false,
+        invalidatedBy: null,
+        policies: { windows: "signed", compatibility: "tested", providers: "live" },
+        evidence: Object.fromEntries(Object.keys(evidenceCatalog).map((key) => [key, "pending"])),
+      });
+
+      let state = initialState();
+      let activeScenario = 0;
+      let scenarioStep = 0;
+
+      const requiredEvidence = (current) => [
+        ...baseEvidence,
+        ...(current.policies.windows === "signed" ? ["windowsSigning"] : []),
+        ...(current.policies.compatibility === "floors" ? ["compatibility"] : []),
+        ...(current.policies.providers === "live" ? ["liveProviders"] : []),
+      ];
+
+      const decision = (current) => {
+        const required = requiredEvidence(current);
+        const failed = required.filter((key) => current.evidence[key] === "fail");
+        const pending = required.filter((key) => current.evidence[key] !== "pass");
+
+        if (current.invalidatedBy) {
+          return {
+            verdict: "INVALIDATED",
+            tone: "invalid",
+            reason: current.invalidatedBy,
+            failed,
+            pending,
+          };
+        }
+        if (!current.bunRecorded) {
+          return {
+            verdict: "BLOCKED",
+            tone: "",
+            reason: "Record one exact Bun version before collecting compiled evidence.",
+            failed,
+            pending,
+          };
+        }
+        if (!current.frozen) {
+          return {
+            verdict: "BLOCKED",
+            tone: "",
+            reason: "Freeze the candidate so every check refers to the same bytes.",
+            failed,
+            pending,
+          };
+        }
+        if (failed.length) {
+          return {
+            verdict: "BLOCKED",
+            tone: "invalid",
+            reason: "At least one required check failed.",
+            failed,
+            pending,
+          };
+        }
+        if (pending.length) {
+          return {
+            verdict: "BLOCKED",
+            tone: "",
+            reason: "Required evidence is still missing.",
+            failed,
+            pending,
+          };
+        }
+        return {
+          verdict: "READY",
+          tone: "ready",
+          reason: "Every selected promise passed against this exact candidate.",
+          failed,
+          pending,
+        };
+      };
+
+      const invalidate = (current, reason) => ({
+        ...current,
+        generation: current.generation + 1,
+        frozen: false,
+        invalidatedBy: reason,
+        evidence: Object.fromEntries(Object.keys(evidenceCatalog).map((key) => [key, "pending"])),
+      });
+
+      const reducer = (current, action) => {
+        if (action.type === "reset") return initialState();
+        if (action.type === "record-bun")
+          return { ...current, bunRecorded: true, invalidatedBy: null };
+        if (action.type === "freeze") return { ...current, frozen: true, invalidatedBy: null };
+        if (action.type === "pass-all") {
+          return {
+            ...current,
+            evidence: {
+              ...current.evidence,
+              ...Object.fromEntries(requiredEvidence(current).map((key) => [key, "pass"])),
+            },
+          };
+        }
+        if (action.type === "replace-artifact") {
+          return invalidate(
+            current,
+            "An artifact changed after evidence was collected; prove the new candidate again.",
+          );
+        }
+        if (action.type === "change-bun") {
+          return {
+            ...invalidate(
+              current,
+              "The embedded Bun version changed; all source and compiled proof must run again.",
+            ),
+            bunRecorded: false,
+          };
+        }
+        if (action.type === "policy") {
+          return {
+            ...current,
+            policies: { ...current.policies, [action.policy]: action.value },
+          };
+        }
+        if (action.type === "evidence") {
+          const next = { pending: "pass", pass: "fail", fail: "pending" }[
+            current.evidence[action.key]
+          ];
+          return {
+            ...current,
+            invalidatedBy: null,
+            evidence: { ...current.evidence, [action.key]: next },
+          };
+        }
+        return current;
+      };
+
+      const dispatch = (action) => {
+        state = reducer(state, action);
+        render();
+      };
+
+      const statusLabel = { pending: "Pending", pass: "Passed", fail: "Failed" };
+
+      const render = () => {
+        const required = requiredEvidence(state);
+        const result = decision(state);
+        const passed = required.filter((key) => state.evidence[key] === "pass").length;
+
+        const verdict = document.querySelector("#verdict");
+        verdict.textContent = result.verdict;
+        verdict.className = `verdict ${result.tone}`;
+        document.querySelector("#decisionReason").textContent = result.reason;
+        document.querySelector("#candidate").textContent =
+          `Generation ${state.generation} · ${state.frozen ? "frozen" : "not frozen"}`;
+        document.querySelector("#bunState").textContent = state.bunRecorded
+          ? "Exact version recorded (simulated)"
+          : "Exact version not recorded";
+        document.querySelector("#progressText").textContent =
+          `${passed} of ${required.length} passed`;
+        document.querySelector("#progressBar").style.width = `${(passed / required.length) * 100}%`;
+        document.querySelector("#policySummary").textContent =
+          `${state.policies.windows === "signed" ? "Signed Windows" : "Documented unsigned Windows"} · ${state.policies.compatibility === "tested" ? "tested environments only" : "minimum floors claimed"} · ${state.policies.providers === "live" ? "live provider smoke required" : "provider contract tests only"}`;
+
+        const blockers = [];
+        if (!state.bunRecorded) blockers.push("No repository Bun pin is represented.");
+        if (!state.frozen) blockers.push("Candidate is not frozen.");
+        result.failed.forEach((key) => blockers.push(`${evidenceCatalog[key].title} failed.`));
+        result.pending
+          .slice(0, 4)
+          .forEach((key) => blockers.push(`${evidenceCatalog[key].title} is pending.`));
+        if (result.pending.length > 4)
+          blockers.push(`${result.pending.length - 4} more required checks are pending.`);
+        document.querySelector("#blockers").innerHTML = blockers.length
+          ? blockers.map((item) => `<li>${item}</li>`).join("")
+          : "<li>No blockers.</li>";
+
+        document.querySelectorAll("[data-policy]").forEach((group) => {
+          const policy = group.dataset.policy;
+          group.querySelectorAll("button").forEach((button) => {
+            const selected = state.policies[policy] === button.dataset.value;
+            button.classList.toggle("selected", selected);
+            button.setAttribute("aria-pressed", String(selected));
+          });
+        });
+
+        document.querySelector("#evidence").innerHTML = required
+          .map((key) => {
+            const item = evidenceCatalog[key];
+            const status = state.evidence[key];
+            return `<article class="evidence-row">
+              <h3>${item.title}</h3>
+              <p>${item.copy}</p>
+              <button class="status ${status}" data-evidence="${key}" aria-label="${item.title}: ${statusLabel[status]}">${statusLabel[status]}</button>
+            </article>`;
+          })
+          .join("");
+
+        document.querySelectorAll("[data-evidence]").forEach((button) => {
+          button.addEventListener("click", () =>
+            dispatch({ type: "evidence", key: button.dataset.evidence }),
+          );
+        });
+      };
+
+      const prepareReady = () => {
+        state = reducer(initialState(), { type: "record-bun" });
+        state = reducer(state, { type: "freeze" });
+        state = reducer(state, { type: "pass-all" });
+        render();
+      };
+
+      const scenarios = [
+        {
+          title: "The honest happy path",
+          copy: "Watch a candidate become ready only after identity and required evidence are both complete.",
+          steps: [
+            ["Record Bun", () => dispatch({ type: "record-bun" })],
+            ["Freeze candidate", () => dispatch({ type: "freeze" })],
+            ["Pass required proof", () => dispatch({ type: "pass-all" })],
+          ],
+        },
+        {
+          title: "The artifact changed",
+          copy: "A rebuilt binary is a new candidate. Old checks and signatures cannot bless its new bytes.",
+          steps: [
+            ["Prepare a ready candidate", prepareReady],
+            ["Replace one artifact", () => dispatch({ type: "replace-artifact" })],
+          ],
+        },
+        {
+          title: "A broader support promise",
+          copy: "Claiming older platform floors adds compatibility evidence; a current hosted runner is not enough.",
+          steps: [
+            ["Prepare a ready candidate", prepareReady],
+            [
+              "Claim minimum floors",
+              () => dispatch({ type: "policy", policy: "compatibility", value: "floors" }),
+            ],
+            [
+              "Pass floor tests",
+              () => {
+                if (state.evidence.compatibility !== "pass")
+                  dispatch({ type: "evidence", key: "compatibility" });
+              },
+            ],
+          ],
+        },
+        {
+          title: "A live provider stopped working",
+          copy: "See the policy choice clearly: require a live smoke test, or rely on deterministic contract tests.",
+          steps: [
+            ["Prepare a ready candidate", prepareReady],
+            [
+              "Fail live smoke",
+              () => {
+                state = { ...state, evidence: { ...state.evidence, liveProviders: "fail" } };
+                render();
+              },
+            ],
+            [
+              "Use contract-only policy",
+              () => dispatch({ type: "policy", policy: "providers", value: "contract" }),
+            ],
+          ],
+        },
+      ];
+
+      const startScenario = (index) => {
+        activeScenario = index;
+        scenarioStep = 0;
+        state = initialState();
+        renderScenario();
+        render();
+      };
+
+      const renderScenario = () => {
+        document.querySelector("#tabs").innerHTML = scenarios
+          .map(
+            (scenario, index) =>
+              `<button role="tab" aria-selected="${index === activeScenario}" data-tab="${index}">${scenario.title}</button>`,
+          )
+          .join("");
+        const scenario = scenarios[activeScenario];
+        document.querySelector("#scenarioTitle").textContent = scenario.title;
+        document.querySelector("#scenarioCopy").textContent = scenario.copy;
+        document.querySelector("#scenarioSteps").innerHTML = scenario.steps
+          .map(
+            ([label], index) =>
+              `<button ${index > scenarioStep ? "disabled" : ""} data-step="${index}">${index + 1}. ${label}</button>`,
+          )
+          .join("");
+
+        document.querySelectorAll("[data-tab]").forEach((button) => {
+          button.addEventListener("click", () => startScenario(Number(button.dataset.tab)));
+        });
+        document.querySelectorAll("[data-step]").forEach((button) => {
+          button.addEventListener("click", () => {
+            const index = Number(button.dataset.step);
+            scenario.steps[index][1]();
+            scenarioStep = Math.max(scenarioStep, index + 1);
+            renderScenario();
+          });
+        });
+      };
+
+      document.querySelectorAll("[data-action]").forEach((button) => {
+        button.addEventListener("click", () => dispatch({ type: button.dataset.action }));
+      });
+      document.querySelectorAll("[data-policy]").forEach((group) => {
+        group.querySelectorAll("button").forEach((button) => {
+          button.addEventListener("click", () =>
+            dispatch({ type: "policy", policy: group.dataset.policy, value: button.dataset.value }),
+          );
+        });
+      });
+
+      renderScenario();
+      render();
+    </script>
+  </body>
+</html>
