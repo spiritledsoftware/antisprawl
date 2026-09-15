@@ -11,9 +11,7 @@
     "lint:staged": "lint-staged",
     "prepare": "husky",
     "build": "bun build --compile src/main.ts --outfile dist/antisprawl",
-    "test": "vitest run && bun test tests/bun tests/acceptance",
-    "test:vitest": "vitest run",
-    "test:bun": "bun test tests/bun tests/acceptance",
+    "test": "bun test",
     "typecheck": "tsc --noEmit",
     "verify": "bun run format:check && bun run lint && bun run typecheck && bun run test"
   },
@@ -25,7 +23,6 @@
     "web-tree-sitter": "0.27.0"
   },
   "devDependencies": {
-    "@effect/vitest": "4.0.0-beta.107",
     "@oxlint/plugins": "1.83.0",
     "@types/bun": "1.4.2",
     "husky": "^9.1.7",
@@ -34,8 +31,7 @@
     "oxlint": "^1.83.0",
     "oxlint-tsgolint": "^7.0.2001",
     "tree-sitter-cli": "0.24.4",
-    "typescript": "^7.0.2",
-    "vitest": "4.1.11"
+    "typescript": "^7.0.2"
   },
   "devEngines": {
     "packageManager": {

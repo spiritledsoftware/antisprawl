@@ -216,7 +216,6 @@ Every directly declared Effect-family package is pinned exactly to `4.0.0-beta.1
 | `@effect/sql-sqlite-bun`   | Effect SQL adapter over `bun:sqlite`, including extension loading.  |
 | `@effect/ai-openai`        | OpenAI embedding adapter.                                           |
 | `@effect/ai-openai-compat` | Generic OpenAI-compatible embedding adapter.                        |
-| `@effect/vitest`           | Effect-aware test execution and Layer lifecycle helpers.            |
 
 One `BunRuntime.runMain` entrypoint composes the process Layers. Scopes and finalizers own resources such as SQLite connections, watcher fibers, and signal-driven shutdown. `Schedule`, timeouts, and scoped fibers express retry, deadline, parallelism, and interruption policies instead of custom Promise or `AbortController` machinery.
 
@@ -442,7 +441,7 @@ Grammar assets may be installed lazily, but pinned project assets do not update 
 
 ## 17. Verification strategy
 
-Vitest is pinned to `4.1.11`, with `@effect/vitest@4.0.0-beta.107`. Effectful module tests use `it.effect`, `it.layer`, `TestClock`, and scoped fixtures. Pure parser, fingerprinting, similarity, and ranking tests remain ordinary synchronous Vitest tests.
+All source and integration tests run through `bun test`. This keeps one runner for the Bun CLI, SQLite, parser, compiled executable, and pure representation checks; a second runner can be added only when a concrete non-Bun test boundary requires it.
 
 There is no numeric public precision claim. Precision, recall, warning frequency, latency, failures, and provider usage are regression signals.
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import type { ExtractedSymbol } from "../../src/language.ts";
 import { representSymbol } from "../../src/representation.ts";
 
