@@ -1,6 +1,6 @@
 # Antisprawl Architecture
 
-> **Status:** Accepted design; the issue #15 TypeScript Structural Index slice is implemented
+> **Status:** Accepted design; issues #15 and #16 are implemented
 >
 > **Target release:** `0.1.0`
 >
@@ -39,7 +39,7 @@ Cross-language discovery is an opt-in experiment within one project, not part of
 
 ### Current implementation boundary
 
-Issue #15 implements only the public `index` command in Structural-only mode: Project discovery, embedded verified TypeScript parsing, source-free Structural representations, and the SQLite Index. `check`, Findings, embeddings, grammar downloads, watchers, harness adapters, other languages, and release packaging remain later work. Sections describing those capabilities are target architecture, not claims about the current executable.
+Issues #15 and #16 implement the public `index` and deterministic Structural-only `check` commands: Project discovery, embedded verified TypeScript parsing, source-free Structural representations, the SQLite Index, and Findings for Symbols changed in the current Edit batch. Findings are never persisted. Embeddings, grammar downloads, watchers, harness adapters, other languages, and release packaging remain later work. Sections describing those capabilities are target architecture, not claims about the current executable.
 
 ## 2. Terms
 
@@ -116,7 +116,7 @@ There is no public library interface in v1. The CLI JSON protocol is the externa
 
 ### 4.3 Configuration
 
-The selected configuration file accepts JSONC comments and trailing commas regardless of its `.json` or `.jsonc` suffix. `$schema` is optional. The future `init` command writes `version: 1`; a missing version means v1 with a warning, while an unsupported future version is an error. Omitted `embedding` selects Structural-only mode; issue #15 rejects explicitly configured providers because provider support is outside this slice.
+The selected configuration file accepts JSONC comments and trailing commas regardless of its `.json` or `.jsonc` suffix. `$schema` is optional. The future `init` command writes `version: 1`; a missing version means v1 with a warning, while an unsupported future version is an error. Omitted `embedding` selects Structural-only mode; issues #15 and #16 reject explicitly configured providers because provider support is outside these slices. Issue #16 also rejects custom detection settings until broader calibration supports them.
 
 Unknown keys produce warnings and are preserved. Wrong value types and contradictory settings are errors. CLI mutations use targeted JSONC edits so comments, formatting, ordering, and unknown keys survive.
 
@@ -155,7 +155,7 @@ A finding contains:
 
 - protocol version and finding ID;
 - finding type;
-- edited and candidate symbol names, repository-relative paths, and source ranges;
+- Edited and Candidate symbol names, Project-relative paths, and source ranges;
 - language and embedding-profile provenance;
 - separate structural and semantic evidence values;
 - calibration state when semantic thresholds are custom or unverified;
@@ -163,9 +163,9 @@ A finding contains:
 
 The finding does not assert that reuse is mandatory. The agent may reuse the existing symbol, generalize an appropriate shared abstraction, keep an intentional duplicate, or suppress the pair with a reason.
 
-Finding IDs hash the finding type, language, and ordered pair of repository-relative path plus qualified symbol name. Content hashes are tracked separately. A suppression therefore survives edits to the same named pair; moving or renaming a symbol causes reevaluation.
+Finding IDs hash the finding type, language, and the two Project-relative path plus qualified-symbol-name identities in canonical sorted order. Current Edited and Candidate roles do not affect the ID. A suppression therefore survives edits to the same named pair; moving or renaming a Symbol causes reevaluation.
 
-Hooks emit a finding once per agent session and edited-symbol content hash. Manual `check` always returns all current findings. At most three findings are injected per edit batch. Probable duplicates rank ahead of related implementations, and at most one experimental related implementation is injected.
+`check` returns Findings only for Eligible Symbols that are new or whose comment-free strict token hash changed in the current Edit batch. An unchanged rerun returns no Findings. Findings and delivery history are not stored: the Agent session retains previously delivered advice, and the stable ID lets it recognize a pair reported after a later edit. Future harness adapters may inject at most three Findings from an Edit batch; Probable duplicates rank ahead of Related implementations, and at most one experimental Related implementation may be injected.
 
 ## 5. Modules and seams
 
@@ -241,7 +241,7 @@ Future `index` and `check` commands may invoke the lazy installer. A hook that c
 
 Only a file's primary language is parsed in v1. Configured path-glob overrides resolve ambiguous extensions. Embedded regions such as JavaScript inside HTML are deferred. Symbols containing Tree-sitter `ERROR` or `MISSING` nodes are skipped, counted in `status`, and retried when their file changes.
 
-Eligible symbols are named functions, methods, and named closures/arrow functions. Enclosing class or module names are metadata, not independently embedded symbols. Whole classes, modules, arbitrary top-level chunks, and anonymous fragments are excluded.
+Eligible symbols are named functions, methods, and named closures/arrow functions. Enclosing class or module names are metadata, not independently embedded symbols. Whole classes, modules, arbitrary top-level chunks, and anonymous fragments are excluded. If one file contains multiple Eligible Symbols with the same qualified name, detection excludes that ambiguous identity with a warning rather than inventing an unstable public identity.
 
 ## 8. Representations and detection
 
@@ -249,7 +249,7 @@ Eligible symbols are named functions, methods, and named closures/arrow function
 
 Small getters, wrappers, and validators often become indistinguishable after identifier and literal normalization, yet sharing them would create a worse abstraction. Antisprawl therefore extracts supported symbols but does not embed, compare, or report symbols below `minimumTokens`.
 
-The count uses comment-free canonical tokens so it is deterministic across supported languages. The shipped default is selected from the development corpus rather than guessed in this document. Lowering the threshold requires explicit indexing of newly eligible symbols; raising it only filters existing records.
+The count uses comment-free canonical tokens so it is deterministic across supported languages. Structural policy version 1 uses a 20-body-token minimum for the frozen issue #16 cases. Broader calibration may justify a later version; lowering the threshold requires explicit indexing of newly eligible Symbols, while raising it only filters existing records.
 
 ### 8.2 Two representations
 
@@ -271,7 +271,7 @@ For a changed-symbol batch:
 5. Apply separate meaningful-size, structural, and semantic gates.
 6. Rank deterministically and construct findings.
 
-Hash equality is evidence, never an automatic advisory. A normalized equality still requires strict-token or role-aware corroboration. Embedding-enabled near misses must also pass their configured semantic gate. Antisprawl does not collapse evidence into an opaque aggregate score.
+Strict hash equality is evidence rather than an automatic advisory. Under Structural policy version 1, equality of the role-aware normalized hash passes the Structural gate; otherwise both the q-gram and ordered-token thresholds must pass. Embedding-enabled near misses must also pass their configured semantic gate. Antisprawl does not collapse evidence into an opaque aggregate score.
 
 Same-language probable duplicates target Type-2 and near-miss Type-3 clones: substantially the same logic with renamed identifiers, changed literals, or small edits. Trivial boilerplate and merely related implementations are excluded.
 
@@ -320,9 +320,10 @@ The disposable project index lives at `.antisprawl/index.sqlite`. It stores:
 - files, content hashes, languages, and parse status;
 - symbol identities, qualified names, ranges, token counts, and fingerprints;
 - embedding profile metadata and vector BLOBs;
-- durable changed-path queue and watcher leases;
-- session finding-deduplication state;
+- durable changed-path queue and watcher leases; and
 - aggregate operational counters and bounded sanitized recent failures.
+
+It does not store Findings, Finding evidence, Finding outcomes, or delivery history.
 
 It stores no source, prompts, commands, transcripts, or credentials.
 
@@ -339,11 +340,14 @@ A configuration or schema incompatibility never triggers a surprise rebuild from
 A changed-file batch follows this order:
 
 1. Read and hash every changed file.
-2. Parse and represent all changed symbols.
-3. Obtain missing embeddings outside any SQLite write transaction.
-4. Re-read hashes; discard work for files that changed during processing.
-5. In short transactions, replace all affected file/symbol records as one batch.
-6. Query every changed symbol against the now-current index, including other symbols from the same parallel edit batch.
+2. Parse and represent its Symbols.
+3. Treat only new Symbols and Symbols whose comment-free strict token hash changed as Edited; formatting, comments, and range-only movement do not trigger detection.
+4. Obtain missing embeddings outside any SQLite write transaction.
+5. Re-read hashes; discard work for files that changed during processing.
+6. Replace all affected file and Symbol records atomically.
+7. Query every Edited symbol against the now-current Index, including other Edited symbols from the same parallel Edit batch.
+
+Currentness is established by the final validation read immediately before the Index transaction. A later filesystem change is discovered by the next check; Antisprawl does not claim to lock project source files.
 
 Concurrent hook processes use SQLite locking with a busy timeout bounded by the hook deadline. Lock contention, provider timeout, or a stale file fails open. No hook delays the agent indefinitely.
 
@@ -395,12 +399,7 @@ Operational rules:
 - Remote source egress is explicit.
 - There is no telemetry by default.
 
-`report` retains only aggregate counts, current finding state, session deduplication state, estimated provider usage, and a small bounded list of sanitized failures. Observable warning outcomes are limited to:
-
-- `resolved`: the pair no longer triggers;
-- `suppressed`: the finding was ignored explicitly;
-- `persisting`: the pair still triggers;
-- `unknown`: parsing or coverage is insufficient.
+`report` retains only aggregate operational counts, estimated provider usage, and a small bounded list of sanitized failures. It does not retain Findings, delivery history, or Finding outcomes. Outcome reporting remains deferred until an implementation ticket establishes a concrete need and data source.
 
 Antisprawl never claims that an agent complied or reused code without deterministic evidence.
 
@@ -489,7 +488,7 @@ Build only enough to validate the core signal:
 - authored clone and hard-negative fixtures;
 - dogfooding against Antisprawl's own TypeScript source.
 
-Continue only when the slice detects authored renamed/near-miss clones, rejects wrapper/boilerplate negatives, replaces edited-file symbols incrementally, resumes interrupted indexing, and emits stable actionable JSON.
+Continue only when the slice detects authored renamed/near-miss clones in the current Edit batch, rejects wrapper/boilerplate negatives, replaces edited-file Symbols incrementally, resumes interrupted indexing, and emits stable actionable JSON.
 
 ### v0.1.0
 
@@ -509,8 +508,8 @@ The repository remains one package with ordinary `src/`, `tests/`, `skills/`, an
 
 The architecture deliberately does not fix values that must come from evidence:
 
-- `minimumTokens`;
-- structural and semantic thresholds;
+- later revisions to the issue #16 Structural policy;
+- semantic thresholds;
 - embedding candidate count;
 - 384 versus 1536 dimensions;
 - watcher debounce and reconciliation intervals;

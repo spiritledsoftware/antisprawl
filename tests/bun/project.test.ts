@@ -3,7 +3,12 @@ import { expect, test } from "bun:test";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import { discoverSourcePaths, resolveProject, type Project } from "../../src/project.ts";
+import {
+  discoverSourcePaths,
+  resolveNamedSourcePaths,
+  resolveProject,
+  type Project,
+} from "../../src/project.ts";
 
 const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
   Effect.runPromise(effect.pipe(Effect.provide(BunServices.layer)));
@@ -95,6 +100,35 @@ test("source discovery includes TypeScript and declaration extensions only", () 
           "types.d.mts",
           "types.d.ts",
         ]);
+      }),
+    ),
+  ));
+
+test("named source paths are literal, in-scope, normalized, and deduplicated", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const paths = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-project-" });
+        const child = paths.join(root, "nested");
+        const source = paths.join(root, "src/example.ts");
+
+        yield* fs.makeDirectory(paths.dirname(source), { recursive: true });
+        yield* fs.makeDirectory(child);
+        yield* fs.writeFileString(source, "export function example() {}\n");
+
+        const project: Project = {
+          root,
+          configHash: "test",
+          include: ["src/**/*.ts"],
+          exclude: [],
+          diagnostics: [],
+        };
+
+        expect(
+          yield* resolveNamedSourcePaths(project, child, ["../src/example.ts", source, source]),
+        ).toEqual([{ path: "src/example.ts", exists: true }]);
       }),
     ),
   ));

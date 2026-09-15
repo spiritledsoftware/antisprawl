@@ -18,6 +18,7 @@ const ConfigSchema = Schema.Struct({
     exclude: Schema.optionalKey(Schema.Array(Schema.String)),
   }),
   embedding: Schema.optionalKey(Schema.Unknown),
+  detection: Schema.optionalKey(Schema.Unknown),
 });
 
 const UnknownRecord = Schema.Record(Schema.String, Schema.Unknown);
@@ -71,7 +72,7 @@ export const resolveProject = Effect.fn("Project.resolve")(function* (startingDi
       );
 
       const decoded = yield* Schema.decodeUnknownEffect(ConfigSchema)(raw).pipe(
-        Effect.mapError((error) => appError("config_invalid", String(error))),
+        Effect.mapError(() => appError("config_invalid", `${selected} is invalid.`)),
       );
 
       if (decoded.version !== undefined && decoded.version !== 1) {
@@ -85,6 +86,13 @@ export const resolveProject = Effect.fn("Project.resolve")(function* (startingDi
         return yield* appError(
           "embedding_not_supported",
           "This increment supports Structural-only configuration.",
+        );
+      }
+
+      if (decoded.detection !== undefined) {
+        return yield* appError(
+          "detection_not_supported",
+          "Custom detection settings are not supported in this increment.",
         );
       }
 
@@ -140,11 +148,99 @@ export const resolveProject = Effect.fn("Project.resolve")(function* (startingDi
   }
 });
 
-const isTypeScriptPath = (path: string) => {
+export const isTypeScriptPath = (path: string) => {
   if (path.endsWith(".tsx")) return false;
 
   return path.endsWith(".ts") || path.endsWith(".mts") || path.endsWith(".cts");
 };
+
+const isInside = (paths: Path.Path, parent: string, child: string) => {
+  const relative = paths.relative(parent, child);
+
+  return relative !== ".." && !relative.startsWith(`..${paths.sep}`) && !paths.isAbsolute(relative);
+};
+
+const matchesSourcePolicy = (project: Project, path: string) => {
+  const included = project.include.some((pattern) => new Bun.Glob(pattern).match(path));
+
+  const excluded = [".antisprawl/**", ...project.exclude].some((pattern) =>
+    new Bun.Glob(pattern).match(path),
+  );
+
+  return included && !excluded;
+};
+
+export interface NamedSourcePath {
+  readonly path: string;
+  readonly exists: boolean;
+}
+
+export const resolveNamedSourcePaths = Effect.fn("Project.resolveNamedSources")(function* (
+  project: Project,
+  startingDirectory: string,
+  arguments_: ReadonlyArray<string>,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const paths = yield* Path.Path;
+  const root = paths.resolve(project.root);
+
+  const realRoot = yield* fs
+    .realPath(root)
+    .pipe(Effect.mapError(() => appError("project_unreadable", "The Project cannot be read.")));
+
+  const resolved = new Map<string, NamedSourcePath>();
+
+  for (const argument of arguments_) {
+    if (/[*?[\]{}]/.test(argument)) {
+      return yield* appError("source_path_invalid", `Source path ${argument} must be literal.`);
+    }
+
+    const absolutePath = paths.resolve(startingDirectory, argument);
+
+    if (!isInside(paths, root, absolutePath)) {
+      return yield* appError(
+        "source_outside_project",
+        `Source path ${argument} escapes the Project.`,
+      );
+    }
+
+    const path = paths.relative(root, absolutePath).split(paths.sep).join("/");
+
+    if (!isTypeScriptPath(path) || !matchesSourcePolicy(project, path)) {
+      return yield* appError(
+        "source_path_unsupported",
+        `Source path ${argument} is outside the configured TypeScript source scope.`,
+      );
+    }
+
+    const exists = yield* fs.exists(absolutePath);
+
+    if (exists) {
+      const info = yield* fs
+        .stat(absolutePath)
+        .pipe(Effect.mapError(() => appError("source_unreadable", `Cannot read ${path}.`)));
+
+      if (info.type !== "File") {
+        return yield* appError("source_path_invalid", `Source path ${argument} is not a file.`);
+      }
+
+      const realPath = yield* fs
+        .realPath(absolutePath)
+        .pipe(Effect.mapError(() => appError("source_unreadable", `Cannot read ${path}.`)));
+
+      if (!isInside(paths, realRoot, realPath)) {
+        return yield* appError(
+          "source_outside_project",
+          `Source path ${argument} escapes the Project.`,
+        );
+      }
+    }
+
+    resolved.set(path, { path, exists });
+  }
+
+  return [...resolved.values()].sort((left, right) => left.path.localeCompare(right.path));
+});
 
 export const discoverSourcePaths = Effect.fn("Project.discoverSources")(function* (
   project: Project,
@@ -158,14 +254,6 @@ export const discoverSourcePaths = Effect.fn("Project.discoverSources")(function
     .pipe(Effect.mapError(() => appError("project_unreadable", "The Project cannot be read.")));
 
   const matches = new Set<string>();
-
-  const isInside = (parent: string, child: string) => {
-    const relative = paths.relative(parent, child);
-
-    return (
-      relative !== ".." && !relative.startsWith(`..${paths.sep}`) && !paths.isAbsolute(relative)
-    );
-  };
 
   for (const include of project.include) {
     const discovered = yield* fs.glob(include, {
@@ -182,7 +270,7 @@ export const discoverSourcePaths = Effect.fn("Project.discoverSources")(function
         .realPath(absolutePath)
         .pipe(Effect.mapError(() => appError("source_unreadable", `Cannot read ${path}.`)));
 
-      if (!isInside(root, absolutePath) || !isInside(realRoot, realPath)) {
+      if (!isInside(paths, root, absolutePath) || !isInside(paths, realRoot, realPath)) {
         return yield* appError(
           "source_outside_project",
           `Source path ${path} escapes the Project.`,
