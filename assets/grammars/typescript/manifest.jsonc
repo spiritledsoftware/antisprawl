@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "language": "typescript",
+  "registry": {
+    "url": "https://github.com/neovim-treesitter/treesitter-parser-registry",
+    "commit": "6eb15358bb9fc88f0d3401d8538d56652e9bdf3c",
+  },
+  "parser": {
+    "repository": "https://github.com/tree-sitter/tree-sitter-typescript",
+    "commit": "75b3874edb2dc714fb1fd77a32013d0f8699989f",
+    "location": "typescript",
+    "abi": 14,
+    "artifact": {
+      "url": "https://github.com/tree-sitter/tree-sitter-typescript/releases/download/v0.23.2/tree-sitter-typescript.wasm",
+      "sourceTag": "v0.23.2",
+      "sourceCommit": "f975a621f4e7f532fe322e13c4f79495e0a7b2e7",
+      "size": 1413849,
+      "sha256": "778025db5a8be0e70f8ccc3671e486dfeddd048c25d9e8a70c26de2e1bf6f97d",
+      "attestationUrl": "https://api.github.com/repos/tree-sitter/tree-sitter-typescript/attestations/sha256:778025db5a8be0e70f8ccc3671e486dfeddd048c25d9e8a70c26de2e1bf6f97d",
+      "equivalentBuildInputs": [
+        "typescript/grammar.js",
+        "typescript/src/grammar.json",
+        "typescript/src/parser.c",
+        "typescript/src/scanner.c",
+      ],
+    },
+    "build": {
+      "treeSitterCli": "0.24.4",
+      "treeSitterCliCommit": "fc8c1863e2e5724a0c40bb6e6cfc8631bfe5908b",
+      "emscripten": "3.1.64",
+      "emscriptenImage": "docker.io/emscripten/emsdk:3.1.64",
+      "emscriptenImageDigest": "sha256:8847dad4171ebc8a53d9ae5cda86a2546ef5b2e68834c14dc1ba2b2962e125cc",
+      "command": "tree-sitter build --wasm typescript",
+    },
+  },
+  "runtime": {
+    "package": "web-tree-sitter",
+    "version": "0.27.0",
+    "languageVersion": 15,
+    "minimumCompatibleLanguageVersion": 13,
+  },
+  "queries": {
+    "discovery": {
+      "repository": "https://github.com/neovim-treesitter/nvim-treesitter-queries-typescript",
+      "commit": "a0659042394b37f5b952b57574e8bd79dc4aa20d",
+      "inherited": {
+        "ecma": "463d2e55597e7328334a1b46a2a8378cb75132b4",
+      },
+    },
+    "symbols": {
+      "path": "symbols.scm",
+      "sha256": "19aac740c43842509516d27f857691d83d5db89ee3039d2cdc1290e015789ce0",
+    },
+  },
+}
