@@ -101,6 +101,7 @@ The future `init` command will add `.antisprawl/index.sqlite*` to the applicable
 | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `antisprawl init`                       | Create project configuration, configure a provider or structural-only mode, and establish ignore rules.                    |
 | `antisprawl index`                      | Build, resume, reconcile, or replace the project index.                                                                    |
+| `antisprawl index --dry-run`            | Preview local indexing work without reading credentials, calling a provider, or mutating the Index.                        |
 | `antisprawl index --update-grammars`    | Explicitly resolve newer grammar/query pins before indexing.                                                               |
 | `antisprawl check [paths...]`           | Update and check named paths; with no paths, reconcile the project.                                                        |
 | `antisprawl status [--probe]`           | Report configuration, coverage, grammars, provider, integrations, and recent failures. `--probe` may contact the provider. |
@@ -117,7 +118,7 @@ There is no public library interface in v1. The CLI JSON protocol is the externa
 
 ### 4.3 Configuration
 
-The selected configuration file accepts JSONC comments and trailing commas regardless of its `.json` or `.jsonc` suffix. `$schema` is optional. The future `init` command writes `version: 1`; a missing version means v1 with a warning, while an unsupported future version is an error. Omitted `embedding` selects Structural-only mode; issues #15 and #16 reject explicitly configured providers because provider support is outside these slices. Issue #16 also rejects custom detection settings until broader calibration supports them.
+The selected configuration file accepts JSONC comments and trailing commas regardless of its `.json` or `.jsonc` suffix. `$schema` is optional. The future `init` command writes `version: 1`; a missing version means v1 with a warning, while an unsupported future version is an error. Omitted `embedding` selects Structural-only mode. Issues #15 through #17 reject explicitly configured providers; issue #18 adds the fixed, calibrated `openai` and experimental `openai-codex` Profiles. Custom models, dimensions, semantic thresholds, and detection settings remain rejected until broader calibration supports them.
 
 Unknown keys produce warnings and are preserved. Wrong value types and contradictory settings are errors. CLI mutations use targeted JSONC edits so comments, formatting, ordering, and unknown keys survive.
 
@@ -129,8 +130,6 @@ Illustrative shape:
   // "$schema" is optional.
   "embedding": {
     "provider": "openai-codex",
-    "model": "text-embedding-3-small",
-    "dimensions": 384,
   },
   "sources": {
     "include": ["**/*"],
@@ -148,7 +147,7 @@ Illustrative shape:
 }
 ```
 
-Provider configuration may name a model, base URL, dimensions, and environment-variable names. API keys and sensitive header values never belong in configuration.
+Issue #18 provider configuration names only `openai` or `openai-codex`; each resolves to its selected fixed Profile. Later generic provider work may add model, base-URL, dimension, and environment-variable settings. API keys and sensitive header values never belong in configuration.
 
 ### 4.4 Finding contract
 
@@ -190,7 +189,7 @@ Converts a symbol into the strict token stream, normalized structural stream, q-
 
 ### Embedding module
 
-Owns explicit provider batch limits, input estimation, retries, deadlines, cancellation, credentials, vector dimensions, and content-hash caching. Each bounded chunk calls an Effect `EmbeddingModel` adapter's `embedMany`; Antisprawl does not rely solely on an SDK's implicit batching. OpenAI, OpenAI-compatible, and experimental Codex OAuth implementations are adapters at this seam. Structural-only mode does not instantiate an embedding adapter.
+Owns explicit provider batch limits, input estimation, retries, deadlines, cancellation, credentials, vector dimensions, and content-hash caching. Each bounded chunk calls an internal provider adapter; Antisprawl does not rely on an SDK's implicit batching. OpenAI, OpenAI-compatible, and experimental Codex OAuth implementations remain behind this seam. Structural-only mode does not instantiate an embedding adapter.
 
 ### Index module
 
@@ -210,19 +209,17 @@ Effect v4 beta is a required runtime foundation, not an incidental dependency. T
 
 Every directly declared Effect-family package is pinned exactly to `4.0.0-beta.107`, and the lockfile fixes the transitive graph:
 
-| Package                    | Role                                                                |
-| -------------------------- | ------------------------------------------------------------------- |
-| `effect`                   | Core effects, Schema, Layers, scopes, schedules, and AI interfaces. |
-| `@effect/platform-bun`     | Bun platform services and `BunRuntime.runMain`.                     |
-| `@effect/sql-sqlite-bun`   | Effect SQL adapter over `bun:sqlite`, including extension loading.  |
-| `@effect/ai-openai`        | OpenAI embedding adapter.                                           |
-| `@effect/ai-openai-compat` | Generic OpenAI-compatible embedding adapter.                        |
+| Package                  | Role                                                               |
+| ------------------------ | ------------------------------------------------------------------ |
+| `effect`                 | Core effects, Schema, Layers, scopes, and schedules.               |
+| `@effect/platform-bun`   | Bun platform services and `BunRuntime.runMain`.                    |
+| `@effect/sql-sqlite-bun` | Effect SQL adapter over `bun:sqlite`, including extension loading. |
 
 One `BunRuntime.runMain` entrypoint composes the process Layers. Scopes and finalizers own resources such as SQLite connections, watcher fibers, and signal-driven shutdown. `Schedule`, timeouts, and scoped fibers express retry, deadline, parallelism, and interruption policies instead of custom Promise or `AbortController` machinery.
 
 Effect `Schema` decodes untrusted configuration, CLI protocol data, provider responses, and persisted provenance. Effectful module interfaces return `Effect` with tagged expected errors. Pure modules accept already-decoded values and do not acquire services or add Effect wrappers.
 
-Unstable Effect CLI, AI, and SQL imports stay inside the executable, Embedding module, and Index module implementations respectively. Their types do not cross the external CLI JSON seam or leak into pure detector modules.
+Unstable Effect CLI and SQL imports stay inside the executable and Index module respectively. Provider HTTP remains inside the Embedding module. These implementation types do not cross the external CLI JSON seam or leak into pure detector modules.
 
 Effect's structured logging and metrics feed the approved local diagnostics and bounded counters. No telemetry exporter is configured by default.
 
@@ -284,33 +281,31 @@ Structural results are reproducible from pinned inputs. Remote providers may cha
 
 ## 9. Embedding providers
 
-V1 supports:
+V1 targets explicit Structural-only operation, OpenAI API-key embeddings, an experimental `openai-codex` adapter, and later generic OpenAI-compatible endpoints. There is no implicit provider or authentication fallback.
 
-- explicit structural-only operation;
-- OpenAI API-key embeddings;
-- generic OpenAI-compatible endpoints;
-- an experimental Hindsight-compatible `openai-codex` adapter.
+Issue #18 adds two fixed providers behind the same internal seam. Both use Bun's built-in `fetch`, explicit batches of two, a 30-second deadline, ordered response validation, and aggregate usage/latency reporting against `https://api.openai.com/v1/embeddings`. They do not retry transport failures, rate limits, or server errors.
 
-There is no implicit provider. `init` requires the user to select a provider or structural-only mode. Any remote provider requires confirmation before source leaves the machine, even when it has no per-call billing.
+### OpenAI API-key adapter
 
-The normal OpenAI and OpenAI-compatible implementations use `@effect/ai-openai` and `@effect/ai-openai-compat`. Both satisfy Effect's `EmbeddingModel` interface with ordered batch embeddings, explicit dimensions, response validation, configurable base URLs, and usage reporting. The experimental Codex OAuth provider is a custom adapter to that same interface so its file-backed authentication and refresh behavior remain localized. Other named providers can be added later without changing the CLI protocol.
+`openai` reads `OPENAI_API_KEY` from the process environment and never persists it. Its fixed `text-embedding-3-small` Profile uses the lowest dimension that passes the live 384/1536 acceptance matrix at the versioned semantic threshold.
 
 ### Experimental Codex OAuth adapter
 
-The vertical slice uses `openai-codex/text-embedding-3-small`, following Hindsight's tested behavior:
+`openai-codex` uses the user's existing file-backed Codex login:
 
-- read `$CODEX_HOME/auth.json`, falling back to `~/.codex/auth.json`;
+- resolve `$CODEX_HOME/auth.json`, using `~/.codex/auth.json` only when `CODEX_HOME` is unset or empty;
 - require file-backed ChatGPT/Codex authentication;
-- send the access token as a bearer token to `https://api.openai.com/v1/embeddings`;
-- lock the auth file, refresh shortly before expiry, retry once after `401`, preserve unknown fields, and atomically write rotated tokens;
-- never log or expose tokens;
-- fail open without modifying the file when refresh fails.
+- send the access token as a bearer token to the embeddings endpoint;
+- use JWT expiry only to schedule refresh within five minutes of expiry;
+- lock and re-read the auth file before refresh, adopt newer on-disk credentials, and never overwrite a file changed concurrently by Codex;
+- preserve unknown fields and atomically persist successful token rotation;
+- retry the embeddings request exactly once after a successful refresh from `401`;
+- never log or expose tokens; and
+- leave the auth file byte-for-byte unchanged when refresh fails.
 
-This route is supported by Hindsight but is not guaranteed by OpenAI's public API contract. It is therefore experimental and intended initially for personal development. Keyring-only credentials are unsupported until a documented bridge exists.
+This OAuth route is not guaranteed by OpenAI's public API contract. It remains experimental and intended for personal development. Keyring-only credentials are unsupported until a documented bridge exists. Its fixed `text-embedding-3-small` Profile is selected independently by the same live 384/1536 matrix.
 
-The vertical slice starts at 384 dimensions and compares it with 1536 dimensions on the same fixtures before a shipped profile is chosen.
-
-Full indexing first discovers symbols and estimates input. A TTY shows the provider, model, dimensions, source-egress status, and estimated input before confirmation. Non-interactive remote indexing requires `--yes`; `--dry-run` performs no embedding calls. Hooks never start a full or newly billable backfill.
+An explicit remote `antisprawl index` is Source-egress consent and establishes the completed Profile required for later incremental work. No prompt or `--yes` is required. `check` never starts a missing, full, or changed-Profile backfill. `index --dry-run` reads no credentials, makes no provider call, and does not mutate the Index. Hooks never initiate remote backfills.
 
 ## 10. Persistence and vector search
 
@@ -470,7 +465,7 @@ Use paired long-running agent tasks that preserve the agent's own workspace acro
 - Effect interruption, timeout, retry, scoped-resource, and tagged-error behavior.
 - Embedded `web-tree-sitter` runtime and lazy grammar WASM loading.
 - SQLite transactions, verified sqlite-vec extraction/loading/probing, and application exact fallback over the same vector BLOBs.
-- Effect AI OpenAI/compatible batching, dimensions, response validation, and usage reporting.
+- OpenAI/Codex batching, dimensions, response validation, credential handling, and usage reporting.
 - Pi, Claude, and Codex lifecycle, watcher, flush, and advisory delivery.
 - Interrupted indexing, concurrent hooks, stale leases, and atomic rebuilds.
 - JSON protocol and JSONC-preserving configuration edits.
@@ -484,6 +479,7 @@ Build only enough to validate the core signal:
 - Bun CLI built with `effect/unstable/cli` and `BunRuntime.runMain`;
 - TypeScript symbol extraction;
 - a private deterministic embedding adapter that validates batching, persistence, interruption, and failures before a real provider is introduced;
+- fixed `openai` and experimental `openai-codex` Profiles selected by the live 384/1536 acceptance matrix;
 - ordinary SQLite vector-BLOB persistence, pinned sqlite-vec exact retrieval, and application exact rescoring;
 - manual `index` and `check`;
 - authored clone and hard-negative fixtures;
@@ -496,7 +492,7 @@ Continue only when the slice detects authored renamed/near-miss clones in the cu
 Add:
 
 - five verified languages;
-- OpenAI API-key and generic OpenAI-compatible providers;
+- generic OpenAI-compatible providers;
 - pinned sqlite-vec with application exact fallback;
 - project watcher and reconciliation;
 - Pi, Codex, and Claude integrations;
