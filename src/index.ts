@@ -181,11 +181,6 @@ const emptySnapshot = (): IndexSnapshot => ({ files: new Map(), symbols: [], vec
 
 const profileEquals = (left: ActiveProfile, right: Profile) =>
   left.identityHash === embeddingIdentityHash(right) &&
-  left.provider === right.provider &&
-  left.model === right.model &&
-  left.dimensions === right.dimensions &&
-  left.language === right.language &&
-  left.representation === right.representation &&
   left.detector === right.detector &&
   left.semanticThreshold === right.semanticThreshold &&
   left.calibration === right.calibration;
@@ -793,8 +788,6 @@ export const activateProfile = Effect.fn("Index.activateProfile")(function* (
   const operation = Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
 
-    yield* sql`PRAGMA foreign_keys = ON`;
-
     return yield* sql.withTransaction(
       Effect.gen(function* () {
         const previous = yield* readProfile();
@@ -974,28 +967,22 @@ export const completeProfile = Effect.fn("Index.completeProfile")(function* (
           );
         }
 
-        const removedRows = yield* sql<CountRow>`
-          SELECT COUNT(*) AS count FROM vectors
-          WHERE embedding_identity != ${active.identityHash}
-             OR NOT EXISTS (
-               SELECT 1 FROM symbols WHERE symbols.embedding_hash = vectors.input_hash
-             )
-        `;
-
-        const removed = yield* Schema.decodeEffect(CountRows)(removedRows).pipe(
-          Effect.mapError(invalidIndex),
-        );
-
-        yield* sql`
+        const removedRows = yield* sql<PresentRow>`
           DELETE FROM vectors
           WHERE embedding_identity != ${active.identityHash}
              OR NOT EXISTS (
                SELECT 1 FROM symbols WHERE symbols.embedding_hash = vectors.input_hash
              )
+          RETURNING 1 AS present
         `;
+
+        const removed = yield* Schema.decodeEffect(PresentRows)(removedRows).pipe(
+          Effect.mapError(invalidIndex),
+        );
+
         yield* sql`UPDATE profile SET complete = 1 WHERE singleton = 1`;
 
-        return { removed: removed[0]?.count ?? 0 };
+        return { removed: removed.length };
       }),
     );
   });

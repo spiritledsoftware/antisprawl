@@ -19,6 +19,14 @@ import type { StructuralRepresentation } from "../../src/representation.ts";
 const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
   Effect.runPromise(effect.pipe(Effect.provide(BunServices.layer)));
 
+const temporaryIndexPath = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const paths = yield* Path.Path;
+  const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-index-" });
+
+  return paths.join(root, "index.sqlite");
+});
+
 const identity: IndexIdentity = {
   configHash: "config",
   grammarManifestSha256: "manifest",
@@ -70,10 +78,7 @@ test("changed-file replacement is transactional", () =>
   run(
     Effect.scoped(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const paths = yield* Path.Path;
-        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-index-" });
-        const indexPath = paths.join(root, "index.sqlite");
+        const indexPath = yield* temporaryIndexPath;
 
         yield* updateIndex(
           indexPath,
@@ -132,10 +137,7 @@ test("one failed replacement rolls back the whole refresh", () =>
   run(
     Effect.scoped(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const paths = yield* Path.Path;
-        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-index-" });
-        const indexPath = paths.join(root, "index.sqlite");
+        const indexPath = yield* temporaryIndexPath;
 
         yield* updateIndex(
           indexPath,
@@ -182,10 +184,7 @@ test("Index snapshots expose current Symbols and count removals", () =>
   run(
     Effect.scoped(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const paths = yield* Path.Path;
-        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-index-" });
-        const indexPath = paths.join(root, "index.sqlite");
+        const indexPath = yield* temporaryIndexPath;
 
         yield* updateIndex(
           indexPath,
@@ -217,10 +216,7 @@ test("complete embedding batches are durable and threshold changes reuse vectors
   run(
     Effect.scoped(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const paths = yield* Path.Path;
-        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-vectors-" });
-        const indexPath = paths.join(root, "index.sqlite");
+        const indexPath = yield* temporaryIndexPath;
         const represented = symbol("current");
 
         yield* updateIndex(
@@ -264,10 +260,7 @@ test("different models never mix vectors even when dimensions match", () =>
   run(
     Effect.scoped(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const paths = yield* Path.Path;
-        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-vectors-" });
-        const indexPath = paths.join(root, "index.sqlite");
+        const indexPath = yield* temporaryIndexPath;
         const represented = { ...symbol("current"), tokenCount: 20 };
         const nextProfile = { ...profile, model: "acceptance-v2" };
 
@@ -308,10 +301,7 @@ test("structural changes mark a complete Profile partial before replacing Symbol
   run(
     Effect.scoped(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const paths = yield* Path.Path;
-        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-vectors-" });
-        const indexPath = paths.join(root, "index.sqlite");
+        const indexPath = yield* temporaryIndexPath;
         const oldSymbol = { ...symbol("old"), tokenCount: 20 };
 
         const newSymbol = {
@@ -352,10 +342,7 @@ test("an invalid embedding batch changes neither vectors nor usage", () =>
   run(
     Effect.scoped(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const paths = yield* Path.Path;
-        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-vectors-" });
-        const indexPath = paths.join(root, "index.sqlite");
+        const indexPath = yield* temporaryIndexPath;
 
         yield* updateIndex(indexPath, identity, [], []);
         yield* activateProfile(indexPath, identity, profile);
@@ -385,10 +372,7 @@ test("invalid persisted Profile semantics are rejected", () =>
   run(
     Effect.scoped(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const paths = yield* Path.Path;
-        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-profile-" });
-        const indexPath = paths.join(root, "index.sqlite");
+        const indexPath = yield* temporaryIndexPath;
 
         yield* updateIndex(indexPath, identity, [], []);
         yield* activateProfile(indexPath, identity, profile);
@@ -410,10 +394,7 @@ test("logical Symbol corruption is rejected", () =>
   run(
     Effect.scoped(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const paths = yield* Path.Path;
-        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-index-" });
-        const indexPath = paths.join(root, "index.sqlite");
+        const indexPath = yield* temporaryIndexPath;
 
         yield* updateIndex(
           indexPath,
@@ -438,10 +419,7 @@ test("unexpected persistent state is rejected as an incompatible schema", () =>
   run(
     Effect.scoped(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const paths = yield* Path.Path;
-        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-index-" });
-        const indexPath = paths.join(root, "index.sqlite");
+        const indexPath = yield* temporaryIndexPath;
 
         yield* updateIndex(
           indexPath,
@@ -476,10 +454,7 @@ test("invalid Symbol fingerprints are rejected", () =>
   run(
     Effect.scoped(
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const paths = yield* Path.Path;
-        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-index-" });
-        const indexPath = paths.join(root, "index.sqlite");
+        const indexPath = yield* temporaryIndexPath;
 
         yield* updateIndex(
           indexPath,
@@ -505,9 +480,7 @@ test("an incompatible Index is rejected without modification", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const paths = yield* Path.Path;
-        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-index-" });
-        const indexPath = paths.join(root, "index.sqlite");
+        const indexPath = yield* temporaryIndexPath;
         const database = new Database(indexPath);
 
         database.query("PRAGMA user_version = 99").run();

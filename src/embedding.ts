@@ -172,13 +172,12 @@ export const runEmbeddingBatch = Effect.fn("Embedding.runBatch")(function* (
   provider: EmbeddingProvider,
   inputs: ReadonlyArray<EmbeddingRequest>,
 ) {
-  const timeout = Effect.sleep(provider.deadlineMs).pipe(
-    Effect.andThen(
-      Effect.fail(appError("embedding_timeout", "The embedding provider exceeded its deadline.")),
-    ),
-  );
-
-  const response = yield* Effect.raceFirst(provider.embed(inputs), timeout).pipe(
+  const response = yield* provider.embed(inputs).pipe(
+    Effect.timeoutOrElse({
+      duration: provider.deadlineMs,
+      orElse: () =>
+        Effect.fail(appError("embedding_timeout", "The embedding provider exceeded its deadline.")),
+    }),
     Effect.flatMap(Schema.decodeUnknownEffect(ProviderResponse)),
     Effect.mapError((error) =>
       Schema.is(AppError)(error)
@@ -187,12 +186,7 @@ export const runEmbeddingBatch = Effect.fn("Embedding.runBatch")(function* (
     ),
   );
 
-  if (
-    !Number.isFinite(response.usage.inputTokens) ||
-    response.usage.inputTokens < 0 ||
-    !Number.isFinite(response.usage.durationMs) ||
-    response.usage.durationMs < 0
-  ) {
+  if (response.usage.inputTokens < 0 || response.usage.durationMs < 0) {
     return yield* appError(
       "embedding_response_invalid",
       "The embedding provider returned invalid usage data.",

@@ -69,6 +69,25 @@ const createProject = Effect.fn("Acceptance.createProject")(function* (
   return root;
 });
 
+const createSemanticProject = Effect.fn("Acceptance.createSemanticProject")(function* (
+  prefix: string,
+) {
+  const paths = yield* Path.Path;
+
+  const projectRoot = yield* createProject(prefix, {
+    [structuralCheckScenario.configPath]: structuralCheckScenario.config,
+    ...structuralCheckScenario.baseline,
+  });
+
+  return {
+    projectRoot,
+    environment: {
+      ANTISPRAW_ACCEPTANCE_EMBEDDINGS: "deterministic-v1",
+      XDG_CACHE_HOME: paths.join(projectRoot, ".cache"),
+    },
+  };
+});
+
 const checkOutput = (
   runCommand: CommandRunner,
   projectRoot: string,
@@ -242,15 +261,7 @@ export const verifySemanticCheck = Effect.fn("Acceptance.verifySemanticCheck")(f
   const fs = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;
 
-  const projectRoot = yield* createProject("antisprawl-semantic-check-", {
-    [structuralCheckScenario.configPath]: structuralCheckScenario.config,
-    ...structuralCheckScenario.baseline,
-  });
-
-  const environment = {
-    ANTISPRAW_ACCEPTANCE_EMBEDDINGS: "deterministic-v1",
-    XDG_CACHE_HOME: paths.join(projectRoot, ".cache"),
-  };
+  const { projectRoot, environment } = yield* createSemanticProject("antisprawl-semantic-check-");
 
   const indexed = runCommand(projectRoot, ["index"], environment);
 
@@ -334,15 +345,8 @@ export const verifySemanticCheck = Effect.fn("Acceptance.verifySemanticCheck")(f
   }
 
   for (const failure of ["digest", "extract", "load", "probe"] as const) {
-    const fallbackRoot = yield* createProject("antisprawl-semantic-fallback-", {
-      [structuralCheckScenario.configPath]: structuralCheckScenario.config,
-      ...structuralCheckScenario.baseline,
-    });
-
-    const fallbackEnvironment = {
-      ...environment,
-      XDG_CACHE_HOME: paths.join(fallbackRoot, ".cache"),
-    };
+    const { projectRoot: fallbackRoot, environment: fallbackEnvironment } =
+      yield* createSemanticProject("antisprawl-semantic-fallback-");
 
     expect(runCommand(fallbackRoot, ["index"], fallbackEnvironment).exitCode, failure).toBe(0);
     yield* fs.writeFileString(
@@ -370,15 +374,8 @@ export const verifySemanticCheck = Effect.fn("Acceptance.verifySemanticCheck")(f
   }
 
   for (const edit of structuralCheckScenario.edits.slice(1)) {
-    const isolatedRoot = yield* createProject("antisprawl-semantic-case-", {
-      [structuralCheckScenario.configPath]: structuralCheckScenario.config,
-      ...structuralCheckScenario.baseline,
-    });
-
-    const isolatedEnvironment = {
-      ...environment,
-      XDG_CACHE_HOME: paths.join(isolatedRoot, ".cache"),
-    };
+    const { projectRoot: isolatedRoot, environment: isolatedEnvironment } =
+      yield* createSemanticProject("antisprawl-semantic-case-");
 
     expect(runCommand(isolatedRoot, ["index"], isolatedEnvironment).exitCode, edit.name).toBe(0);
     yield* fs.writeFileString(paths.join(isolatedRoot, "src/edit.ts"), edit.source);
@@ -406,15 +403,8 @@ export const verifySemanticCheck = Effect.fn("Acceptance.verifySemanticCheck")(f
             ],
     });
 
-    const fallbackRoot = yield* createProject("antisprawl-semantic-case-fallback-", {
-      [structuralCheckScenario.configPath]: structuralCheckScenario.config,
-      ...structuralCheckScenario.baseline,
-    });
-
-    const fallbackEnvironment = {
-      ...environment,
-      XDG_CACHE_HOME: paths.join(fallbackRoot, ".cache"),
-    };
+    const { projectRoot: fallbackRoot, environment: fallbackEnvironment } =
+      yield* createSemanticProject("antisprawl-semantic-case-fallback-");
 
     expect(runCommand(fallbackRoot, ["index"], fallbackEnvironment).exitCode, edit.name).toBe(0);
     yield* fs.writeFileString(paths.join(fallbackRoot, "src/edit.ts"), edit.source);
@@ -438,17 +428,10 @@ export const verifySemanticCheck = Effect.fn("Acceptance.verifySemanticCheck")(f
     expect(fallbackCore.findings, edit.name).toEqual(core.findings);
   }
 
-  const identityRoot = yield* createProject("antisprawl-semantic-identity-", {
-    [structuralCheckScenario.configPath]: structuralCheckScenario.config,
-    ...structuralCheckScenario.baseline,
-  });
+  const { projectRoot: identityRoot, environment: identityEnvironment } =
+    yield* createSemanticProject("antisprawl-semantic-identity-");
 
   const identityTrace = paths.join(identityRoot, "identity.trace");
-
-  const identityEnvironment = {
-    ANTISPRAW_ACCEPTANCE_EMBEDDINGS: "deterministic-v1",
-    XDG_CACHE_HOME: paths.join(identityRoot, ".cache"),
-  };
 
   expect(runCommand(identityRoot, ["index"], identityEnvironment).exitCode).toBe(0);
 

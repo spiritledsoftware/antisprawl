@@ -428,30 +428,17 @@ const nativeSearch = Effect.fn("App.nativeSearch")(function* (
 
     if (result === undefined) return { path: "application_exact" as const };
 
-    const expected = [...snapshot.vectors]
-      .flatMap(([hash, candidate]) =>
+    const expected = new Set(
+      [...snapshot.vectors].flatMap(([hash, candidate]) =>
         applicationCosine(vector, candidate) >= provider.profile.semanticThreshold ? [hash] : [],
-      )
-      .sort();
+      ),
+    );
 
-    const candidates = result
-      .filter((hash) => {
-        const candidate = snapshot.vectors.get(hash);
+    const candidates = new Set(result.filter((hash) => expected.has(hash)));
 
-        return (
-          candidate !== undefined &&
-          applicationCosine(vector, candidate) >= provider.profile.semanticThreshold
-        );
-      })
-      .sort();
+    if (candidates.size !== expected.size) return { path: "application_exact" as const };
 
-    if (candidates.join("\0") !== expected.join("\0")) {
-      return { path: "application_exact" as const };
-    }
-
-    if (symbol !== undefined) {
-      candidateHashesByQuery.set(symbol.embeddingHash, new Set(candidates));
-    }
+    if (symbol !== undefined) candidateHashesByQuery.set(symbol.embeddingHash, candidates);
   }
 
   return { path: "sqlite_vec" as const, candidateHashesByQuery };

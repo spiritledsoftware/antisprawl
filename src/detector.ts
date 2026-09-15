@@ -255,15 +255,13 @@ export const detectProbableDuplicates = (
           qgramSimilarity: roundEvidence(qgramSimilarity),
           orderedTokenSimilarity: roundEvidence(tokenOrderSimilarity),
         },
+        semanticEvidence:
+          cosineSimilarity === undefined
+            ? undefined
+            : { cosineSimilarity: roundEvidence(cosineSimilarity) },
         guidance:
           "Inspect whether the Edited symbol can reuse the Candidate symbol before keeping both.",
       };
-
-      if (cosineSimilarity !== undefined) {
-        Object.assign(finding, {
-          semanticEvidence: { cosineSimilarity: roundEvidence(cosineSimilarity) },
-        });
-      }
 
       findings.push({
         cosineSimilarity,
