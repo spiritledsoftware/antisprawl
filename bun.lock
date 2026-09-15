@@ -25,6 +25,9 @@
       },
     },
   },
+  "overrides": {
+    "@effect/platform-node-shared": "4.0.0-beta.107",
+  },
   "packages": {
     "@effect/platform-bun": ["@effect/platform-bun@4.0.0-beta.107", "", { "dependencies": { "@effect/platform-node-shared": "^4.0.0-beta.107" }, "peerDependencies": { "effect": "^4.0.0-beta.107" } }, "sha512-nDKutCpgr+xHQX7tgN8Cq6JXtj96GqiElKaJ7AwAkZYl2q9f6onc/3aJgl6CyH/DlUoidw6YaxeU+UaTRmMN1g=="],
 
@@ -247,7 +250,5 @@
     "ws": ["ws@8.21.3", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw=="],
 
     "yaml": ["yaml@2.9.1", "", { "bin": { "yaml": "bin.mjs" } }, "sha512-3NxN8+78OdzbT7C/WjGsyfPAtJaN3FNDsWxv7Y7mcDsT/oOmgW8BpyQQFFBnvZE3j9Y2Sdz1ULFLezL7Eb2yFw=="],
-
-    "@effect/platform-bun/@effect/platform-node-shared": ["@effect/platform-node-shared@4.0.0-rc.115", "", { "dependencies": { "@types/ws": "^8.18.1", "ws": "^8.21.3" }, "peerDependencies": { "effect": "^4.0.0-rc.115" } }, "sha512-rcBwhDIfb82akJoTv7Vwh8K5x9vC/XfuePS7JjOr+z+dORXzsmKqI1BUQF27ARCN9fTAbDh7I6YvBlWhLjnqNg=="],
   }
 }

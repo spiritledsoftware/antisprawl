@@ -3,6 +3,7 @@ import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import * as BunServices from "@effect/platform-bun/BunServices";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Command from "effect/unstable/cli/Command";
 import { indexProject } from "./app.ts";
 import { appError } from "./errors.ts";
@@ -12,11 +13,9 @@ const expectedBunVersion = packageJson.devEngines.packageManager.version;
 const index = Command.make("index", {}, () =>
   Effect.gen(function* () {
     if (process.versions.bun !== expectedBunVersion) {
-      return yield* Effect.fail(
-        appError(
-          "bun_version_mismatch",
-          `Expected Bun ${expectedBunVersion}, got ${process.versions.bun}.`,
-        ),
+      return yield* appError(
+        "bun_version_mismatch",
+        `Expected Bun ${expectedBunVersion}, got ${process.versions.bun}.`,
       );
     }
 
@@ -28,7 +27,9 @@ const index = Command.make("index", {}, () =>
       );
     }
 
-    yield* Console.log(JSON.stringify(output));
+    const json = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(output);
+
+    yield* Console.log(json);
   }),
 );
 

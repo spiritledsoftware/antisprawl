@@ -2,9 +2,8 @@ import * as BunServices from "@effect/platform-bun/BunServices";
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import * as Effect from "effect/Effect";
-import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import {
   readIndexedFiles,
   updateIndex,
@@ -56,105 +55,109 @@ const file = (
   symbols,
 });
 
-test("changed-file replacement is transactional", async () => {
-  const root = await mkdtemp(join(tmpdir(), "antisprawl-index-"));
-  const indexPath = join(root, "index.sqlite");
+test("changed-file replacement is transactional", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const paths = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-index-" });
+        const indexPath = paths.join(root, "index.sqlite");
 
-  try {
-    await run(
-      updateIndex(
-        indexPath,
-        identity,
-        [{ path: "src/example.ts", contentHash: "old" }],
-        [file("old", [symbol("old")])],
-      ),
-    );
+        yield* updateIndex(
+          indexPath,
+          identity,
+          [{ path: "src/example.ts", contentHash: "old" }],
+          [file("old", [symbol("old")])],
+        );
 
-    const error = await run(
-      Effect.flip(
-        updateIndex(
+        const error = yield* Effect.flip(
+          updateIndex(
+            indexPath,
+            identity,
+            [{ path: "src/example.ts", contentHash: "new" }],
+            [file("new", [symbol("duplicate"), symbol("duplicate")])],
+          ),
+        );
+
+        expect(error).toMatchObject({ code: "index_update_failed" });
+
+        const database = new Database(indexPath, { readonly: true });
+
+        expect(database.query("select content_hash from files").get()).toEqual({
+          content_hash: "old",
+        });
+        expect(database.query("select symbol_key from symbols").all()).toEqual([
+          { symbol_key: "old" },
+        ]);
+        database.close();
+
+        yield* updateIndex(
           indexPath,
           identity,
           [{ path: "src/example.ts", contentHash: "new" }],
-          [file("new", [symbol("duplicate"), symbol("duplicate")])],
-        ),
-      ),
-    );
+          [file("new", [symbol("new")])],
+        );
 
-    expect(error).toMatchObject({ code: "index_update_failed" });
+        const replaced = new Database(indexPath, { readonly: true });
 
-    const database = new Database(indexPath, { readonly: true });
+        expect(replaced.query("select content_hash from files").get()).toEqual({
+          content_hash: "new",
+        });
+        expect(replaced.query("select symbol_key from symbols").all()).toEqual([
+          { symbol_key: "new" },
+        ]);
+        replaced.close();
+      }),
+    ),
+  ));
 
-    expect(database.query("select content_hash from files").get()).toEqual({
-      content_hash: "old",
-    });
-    expect(database.query("select symbol_key from symbols").all()).toEqual([{ symbol_key: "old" }]);
-    database.close();
+test("logical Symbol corruption is rejected", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const paths = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-index-" });
+        const indexPath = paths.join(root, "index.sqlite");
 
-    await run(
-      updateIndex(
-        indexPath,
-        identity,
-        [{ path: "src/example.ts", contentHash: "new" }],
-        [file("new", [symbol("new")])],
-      ),
-    );
+        yield* updateIndex(
+          indexPath,
+          identity,
+          [{ path: "src/example.ts", contentHash: "old" }],
+          [file("old", [symbol("old")])],
+        );
 
-    const replaced = new Database(indexPath, { readonly: true });
+        const database = new Database(indexPath);
 
-    expect(replaced.query("select content_hash from files").get()).toEqual({
-      content_hash: "new",
-    });
-    expect(replaced.query("select symbol_key from symbols").all()).toEqual([{ symbol_key: "new" }]);
-    replaced.close();
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
-});
+        database.query("delete from symbols").run();
+        database.close();
 
-test("logical Symbol corruption is rejected", async () => {
-  const root = await mkdtemp(join(tmpdir(), "antisprawl-index-"));
-  const indexPath = join(root, "index.sqlite");
+        const error = yield* Effect.flip(readIndexedFiles(indexPath, identity));
 
-  try {
-    await run(
-      updateIndex(
-        indexPath,
-        identity,
-        [{ path: "src/example.ts", contentHash: "old" }],
-        [file("old", [symbol("old")])],
-      ),
-    );
+        expect(error).toMatchObject({ code: "index_invalid" });
+      }),
+    ),
+  ));
 
-    const database = new Database(indexPath);
+test("an incompatible Index is rejected without modification", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const paths = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-index-" });
+        const indexPath = paths.join(root, "index.sqlite");
+        const database = new Database(indexPath);
 
-    database.query("delete from symbols").run();
-    database.close();
+        database.query("PRAGMA user_version = 99").run();
+        database.close();
 
-    const error = await run(Effect.flip(readIndexedFiles(indexPath, identity)));
+        const before = yield* fs.readFile(indexPath);
+        const error = yield* Effect.flip(updateIndex(indexPath, identity, [], []));
 
-    expect(error).toMatchObject({ code: "index_invalid" });
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
-});
-
-test("an incompatible Index is rejected without modification", async () => {
-  const root = await mkdtemp(join(tmpdir(), "antisprawl-index-"));
-  const indexPath = join(root, "index.sqlite");
-
-  try {
-    const database = new Database(indexPath);
-
-    database.exec("PRAGMA user_version = 99");
-    database.close();
-
-    const before = await Bun.file(indexPath).bytes();
-    const error = await run(Effect.flip(updateIndex(indexPath, identity, [], [])));
-
-    expect(error).toMatchObject({ code: "index_incompatible" });
-    expect(await Bun.file(indexPath).bytes()).toEqual(before);
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
-});
+        expect(error).toMatchObject({ code: "index_incompatible" });
+        expect(yield* fs.readFile(indexPath)).toEqual(before);
+      }),
+    ),
+  ));

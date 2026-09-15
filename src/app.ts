@@ -106,8 +106,9 @@ export const indexProject = Effect.fn("App.indexProject")(function* (startingDir
       .pipe(Effect.mapError(() => appError("source_unreadable", `Cannot read ${current.path}.`)));
 
     if (sha256(source) !== current.contentHash) {
-      return yield* Effect.fail(
-        appError("source_changed_during_index", `${current.path} changed during indexing.`),
+      return yield* appError(
+        "source_changed_during_index",
+        `${current.path} changed during indexing.`,
       );
     }
   }

@@ -12,7 +12,7 @@ const configNames = [
 ] as const;
 
 const ConfigSchema = Schema.Struct({
-  version: Schema.optionalKey(Schema.Number),
+  version: Schema.optionalKey(Schema.Int),
   sources: Schema.Struct({
     include: Schema.Array(Schema.String),
     exclude: Schema.optionalKey(Schema.Array(Schema.String)),
@@ -76,26 +76,23 @@ export const resolveProject = Effect.fn("Project.resolve")(function* (startingDi
       );
 
       if (decoded.version !== undefined && decoded.version !== 1) {
-        return yield* Effect.fail(
-          appError(
-            "config_version_unsupported",
-            `Configuration version ${decoded.version} is unsupported.`,
-          ),
+        return yield* appError(
+          "config_version_unsupported",
+          `Configuration version ${decoded.version} is unsupported.`,
         );
       }
 
       if (decoded.embedding !== undefined) {
-        return yield* Effect.fail(
-          appError(
-            "embedding_not_supported",
-            "This increment supports Structural-only configuration.",
-          ),
+        return yield* appError(
+          "embedding_not_supported",
+          "This increment supports Structural-only configuration.",
         );
       }
 
       if (decoded.sources.include.length === 0) {
-        return yield* Effect.fail(
-          appError("config_invalid", "sources.include must contain at least one pattern."),
+        return yield* appError(
+          "config_invalid",
+          "sources.include must contain at least one pattern.",
         );
       }
 
@@ -138,9 +135,7 @@ export const resolveProject = Effect.fn("Project.resolve")(function* (startingDi
     const parent = paths.dirname(directory);
 
     if (parent === directory) {
-      return yield* Effect.fail(
-        appError("project_not_found", `No ${configNames.join(", ")} found.`),
-      );
+      return yield* appError("project_not_found", `No ${configNames.join(", ")} found.`);
     }
 
     directory = parent;
@@ -190,8 +185,9 @@ export const discoverSourcePaths = Effect.fn("Project.discoverSources")(function
         .pipe(Effect.mapError(() => appError("source_unreadable", `Cannot read ${path}.`)));
 
       if (!isInside(root, absolutePath) || !isInside(realRoot, realPath)) {
-        return yield* Effect.fail(
-          appError("source_outside_project", `Source path ${path} escapes the Project.`),
+        return yield* appError(
+          "source_outside_project",
+          `Source path ${path} escapes the Project.`,
         );
       }
 

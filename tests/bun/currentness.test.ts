@@ -1,11 +1,9 @@
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { expect, spyOn, test } from "bun:test";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Result from "effect/Result";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { tmpdir } from "node:os";
 import { Parser } from "web-tree-sitter";
 import { indexProject } from "../../src/app.ts";
 import { structuralIndexScenario } from "../acceptance/structural-index.scenario.ts";
@@ -13,96 +11,107 @@ import { structuralIndexScenario } from "../acceptance/structural-index.scenario
 const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
   Effect.runPromise(effect.pipe(Effect.provide(BunServices.layer)));
 
-test("a source change during parsing does not update the Index", async () => {
-  const root = await mkdtemp(join(tmpdir(), "antisprawl-currentness-"));
-  const sourcePath = join(root, "src/jobs.ts");
+const writeScenario = (root: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const paths = yield* Path.Path;
 
-  try {
     for (const [path, contents] of Object.entries({
       [structuralIndexScenario.configPath]: structuralIndexScenario.config,
       ...structuralIndexScenario.files,
     })) {
-      await mkdir(dirname(join(root, path)), { recursive: true });
-      await Bun.write(join(root, path), contents);
+      const absolutePath = paths.join(root, path);
+
+      yield* fs.makeDirectory(paths.dirname(absolutePath), { recursive: true });
+      yield* fs.writeFileString(absolutePath, contents);
     }
+  });
 
-    await run(indexProject(root));
+test("a source change during parsing does not update the Index", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const paths = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-currentness-" });
+        const sourcePath = paths.join(root, "src/jobs.ts");
+        const indexPath = paths.join(root, ".antisprawl/index.sqlite");
 
-    const indexPath = join(root, ".antisprawl/index.sqlite");
-    const before = await Bun.file(indexPath).bytes();
+        yield* writeScenario(root);
+        yield* indexProject(root);
 
-    await Bun.write(sourcePath, "export function beforeParse() { return 1; }\n");
+        const before = yield* fs.readFile(indexPath);
 
-    const parseDescriptor = Object.getOwnPropertyDescriptor(Parser.prototype, "parse");
+        yield* fs.writeFileString(sourcePath, "export function beforeParse() { return 1; }\n");
 
-    if (parseDescriptor?.value === undefined) throw new Error("Parser.parse is unavailable.");
+        const parseDescriptor = Object.getOwnPropertyDescriptor(Parser.prototype, "parse");
 
-    const originalParse: Parser["parse"] = parseDescriptor.value;
+        if (parseDescriptor?.value === undefined) throw new Error("Parser.parse is unavailable.");
 
-    const parse = spyOn(Parser.prototype, "parse").mockImplementation(function (
-      this: Parser,
-      callback,
-      oldTree,
-      options,
-    ) {
-      writeFileSync(sourcePath, "export function duringParse() { return 2; }\n");
+        const originalParse: Parser["parse"] = parseDescriptor.value;
 
-      return originalParse.call(this, callback, oldTree, options);
-    });
+        const parse = spyOn(Parser.prototype, "parse").mockImplementation(function (
+          this: Parser,
+          callback,
+          oldTree,
+          options,
+        ) {
+          const write = Bun.spawnSync([
+            process.execPath,
+            "-e",
+            "await Bun.write(process.argv[1], process.argv[2])",
+            sourcePath,
+            "export function duringParse() { return 2; }\n",
+          ]);
 
-    try {
-      const result = await run(Effect.result(indexProject(root)));
+          if (write.exitCode !== 0) throw new Error(write.stderr.toString());
 
-      expect(Result.isFailure(result)).toBe(true);
+          return originalParse.call(this, callback, oldTree, options);
+        });
 
-      if (Result.isFailure(result)) {
-        expect(result.failure).toMatchObject({ code: "source_changed_during_index" });
-      }
+        yield* Effect.gen(function* () {
+          const result = yield* Effect.result(indexProject(root));
 
-      expect(await Bun.file(indexPath).bytes()).toEqual(before);
-    } finally {
-      parse.mockRestore();
-    }
+          expect(Result.isFailure(result)).toBe(true);
 
-    const output = await run(indexProject(root));
+          if (Result.isFailure(result)) {
+            expect(result.failure).toMatchObject({ code: "source_changed_during_index" });
+          }
 
-    expect(output.work).toEqual({
-      files: { indexed: 1, reused: 0 },
-      symbols: { indexed: 1, reused: 0 },
-    });
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
-});
+          expect(yield* fs.readFile(indexPath)).toEqual(before);
+        }).pipe(Effect.ensuring(Effect.sync(() => parse.mockRestore())));
 
-test("unchanged content hashes skip TypeScript reprocessing", async () => {
-  const root = await mkdtemp(join(tmpdir(), "antisprawl-currentness-"));
+        const output = yield* indexProject(root);
 
-  try {
-    for (const [path, contents] of Object.entries({
-      [structuralIndexScenario.configPath]: structuralIndexScenario.config,
-      ...structuralIndexScenario.files,
-    })) {
-      await mkdir(dirname(join(root, path)), { recursive: true });
-      await Bun.write(join(root, path), contents);
-    }
+        expect(output.work).toEqual({
+          files: { indexed: 1, reused: 0 },
+          symbols: { indexed: 1, reused: 0 },
+        });
+      }),
+    ),
+  ));
 
-    await run(indexProject(root));
+test("unchanged content hashes skip TypeScript reprocessing", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-currentness-" });
 
-    const parse = spyOn(Parser.prototype, "parse");
+        yield* writeScenario(root);
+        yield* indexProject(root);
 
-    try {
-      const output = await run(indexProject(root));
+        const parse = spyOn(Parser.prototype, "parse");
 
-      expect(parse).not.toHaveBeenCalled();
-      expect(output.work).toEqual({
-        files: { indexed: 0, reused: 1 },
-        symbols: { indexed: 0, reused: 1 },
-      });
-    } finally {
-      parse.mockRestore();
-    }
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
-});
+        yield* Effect.gen(function* () {
+          const output = yield* indexProject(root);
+
+          expect(parse).not.toHaveBeenCalled();
+          expect(output.work).toEqual({
+            files: { indexed: 0, reused: 1 },
+            symbols: { indexed: 0, reused: 1 },
+          });
+        }).pipe(Effect.ensuring(Effect.sync(() => parse.mockRestore())));
+      }),
+    ),
+  ));

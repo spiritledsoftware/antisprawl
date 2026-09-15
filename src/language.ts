@@ -12,16 +12,16 @@ const ManifestSchema = Schema.Struct({
   language: Schema.Literal("typescript"),
   parser: Schema.Struct({
     commit: Schema.String,
-    abi: Schema.Number,
+    abi: Schema.Int,
     artifact: Schema.Struct({
-      size: Schema.Number,
+      size: Schema.Int,
       sha256: Schema.String,
     }),
   }),
   runtime: Schema.Struct({
     version: Schema.String,
-    languageVersion: Schema.Number,
-    minimumCompatibleLanguageVersion: Schema.Number,
+    languageVersion: Schema.Int,
+    minimumCompatibleLanguageVersion: Schema.Int,
   }),
   queries: Schema.Struct({
     symbols: Schema.Struct({
@@ -92,20 +92,23 @@ export const loadBundledTypeScriptGrammar = Effect.fn("Language.loadBundledTypeS
     const query = yield* Effect.promise(() => Bun.file(queryPath).text());
 
     if (bytes.byteLength !== manifest.parser.artifact.size) {
-      return yield* Effect.fail(
-        appError("grammar_size_mismatch", "The embedded TypeScript grammar has the wrong size."),
+      return yield* appError(
+        "grammar_size_mismatch",
+        "The embedded TypeScript grammar has the wrong size.",
       );
     }
 
     if (sha256(bytes) !== manifest.parser.artifact.sha256) {
-      return yield* Effect.fail(
-        appError("grammar_digest_mismatch", "The embedded TypeScript grammar failed verification."),
+      return yield* appError(
+        "grammar_digest_mismatch",
+        "The embedded TypeScript grammar failed verification.",
       );
     }
 
     if (sha256(query) !== manifest.queries.symbols.sha256) {
-      return yield* Effect.fail(
-        appError("query_digest_mismatch", "The TypeScript symbol query failed verification."),
+      return yield* appError(
+        "query_digest_mismatch",
+        "The TypeScript symbol query failed verification.",
       );
     }
 
@@ -308,16 +311,23 @@ export const parseTypeScript = Effect.fn("Language.parseTypeScript")(function* (
   grammar: ResolvedGrammar,
   source: string,
 ) {
-  return yield* Effect.tryPromise({
-    try: async () => {
-      await initializeParser();
+  const parseFailure = () =>
+    appError("typescript_parse_failed", "The TypeScript grammar could not parse the file.");
 
-      const language = await Language.load(grammar.bytes);
+  yield* Effect.tryPromise({
+    try: initializeParser,
+    catch: parseFailure,
+  });
 
-      if (language.abiVersion !== grammar.provenance.parserAbi) {
-        throw new Error("Parser ABI does not match its manifest.");
-      }
+  const language = yield* Effect.tryPromise({
+    try: () => Language.load(grammar.bytes),
+    catch: parseFailure,
+  });
 
+  if (language.abiVersion !== grammar.provenance.parserAbi) return yield* parseFailure();
+
+  return yield* Effect.try({
+    try: () => {
       const parser = new Parser();
       let query: Query | undefined;
       let tree: Tree | null = null;
@@ -369,7 +379,6 @@ export const parseTypeScript = Effect.fn("Language.parseTypeScript")(function* (
         parser.delete();
       }
     },
-    catch: () =>
-      appError("typescript_parse_failed", "The TypeScript grammar could not parse the file."),
+    catch: parseFailure,
   });
 });

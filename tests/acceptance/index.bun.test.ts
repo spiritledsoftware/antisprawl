@@ -1,12 +1,12 @@
+import * as BunServices from "@effect/platform-bun/BunServices";
 import { test } from "bun:test";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import * as Effect from "effect/Effect";
 import { verifyStructuralIndex } from "./structural-index.harness.ts";
 
-const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
+const sourceEntrypoint = Bun.fileURLToPath(new URL("../../src/main.ts", import.meta.url));
 
 const runIndex = (projectRoot: string) => {
-  const process = Bun.spawnSync(["bun", join(repositoryRoot, "src/main.ts"), "index"], {
+  const process = Bun.spawnSync(["bun", sourceEntrypoint, "index"], {
     cwd: projectRoot,
     env: { ...Bun.env, NO_COLOR: "1" },
     stderr: "pipe",
@@ -21,4 +21,6 @@ const runIndex = (projectRoot: string) => {
 };
 
 test("source index builds and reuses the real TypeScript Structural Index", () =>
-  verifyStructuralIndex(runIndex));
+  Effect.runPromise(
+    Effect.scoped(verifyStructuralIndex(runIndex)).pipe(Effect.provide(BunServices.layer)),
+  ));

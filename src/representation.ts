@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { CanonicalToken, ExtractedSymbol } from "./language.ts";
 
 export const representationVersion = 1;
@@ -20,12 +19,12 @@ export interface StructuralRepresentation {
   readonly qgramHashes: Uint8Array;
 }
 
-const sha256 = (value: Uint8Array) => createHash("sha256").update(value).digest("hex");
+const sha256 = (value: Uint8Array) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
 
 const tokenDigest = (token: CanonicalToken, normalized: boolean) => {
   const text = normalized ? token.normalized : token.text;
 
-  return createHash("sha256")
+  return new Bun.CryptoHasher("sha256")
     .update(token.type)
     .update("\0")
     .update(token.role)

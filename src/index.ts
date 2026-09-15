@@ -16,11 +16,11 @@ const ExistingFileRows = Schema.Array(
     path: Schema.String,
     content_hash: Schema.String,
     parse_status: Schema.Literals(["current", "degraded"]),
-    symbol_count: Schema.Number,
+    symbol_count: Schema.Int,
   }),
 );
 
-const VersionRows = Schema.Array(Schema.Struct({ user_version: Schema.Number }));
+const VersionRows = Schema.Array(Schema.Struct({ user_version: Schema.Int }));
 
 const NameRows = Schema.Array(Schema.Struct({ name: Schema.String }));
 
@@ -31,7 +31,9 @@ const MetadataRows = Schema.Array(
   }),
 );
 
-const SymbolIntegrityRows = Schema.Array(Schema.Struct({ invalid: Schema.Number }));
+const SymbolIntegrityRows = Schema.Array(Schema.Struct({ invalid: Schema.Int }));
+
+const isAppError = Schema.is(AppError);
 
 export interface FileRecord {
   readonly path: string;
@@ -100,13 +102,14 @@ const inspectExistingIndex = Effect.fn("Index.inspectExisting")(function* (
 
     const versions = yield* sql<VersionRow>`PRAGMA user_version`;
 
-    const decodedVersions = yield* Schema.decodeUnknownEffect(VersionRows)(versions).pipe(
+    const decodedVersions = yield* Schema.decodeEffect(VersionRows)(versions).pipe(
       Effect.mapError(() => appError("index_invalid", "The Index contains invalid data.")),
     );
 
     if (decodedVersions[0]?.user_version !== indexSchemaVersion) {
-      return yield* Effect.fail(
-        appError("index_incompatible", "The existing Index has an unsupported schema version."),
+      return yield* appError(
+        "index_incompatible",
+        "The existing Index has an unsupported schema version.",
       );
     }
 
@@ -117,19 +120,17 @@ const inspectExistingIndex = Effect.fn("Index.inspectExisting")(function* (
       ORDER BY name
     `;
 
-    const decodedNames = yield* Schema.decodeUnknownEffect(NameRows)(names).pipe(
+    const decodedNames = yield* Schema.decodeEffect(NameRows)(names).pipe(
       Effect.mapError(() => appError("index_invalid", "The Index contains invalid data.")),
     );
 
     if (decodedNames.map((row) => row.name).join(",") !== "files,metadata,symbols") {
-      return yield* Effect.fail(
-        appError("index_incompatible", "The existing Index schema is incomplete."),
-      );
+      return yield* appError("index_incompatible", "The existing Index schema is incomplete.");
     }
 
     const metadataRows = yield* sql<MetadataRow>`SELECT key, value FROM metadata`;
 
-    const decodedMetadata = yield* Schema.decodeUnknownEffect(MetadataRows)(metadataRows).pipe(
+    const decodedMetadata = yield* Schema.decodeEffect(MetadataRows)(metadataRows).pipe(
       Effect.mapError(() => appError("index_invalid", "The Index contains invalid data.")),
     );
 
@@ -140,11 +141,9 @@ const inspectExistingIndex = Effect.fn("Index.inspectExisting")(function* (
       metadata.get("grammar_manifest_sha256") !== identity.grammar.manifestSha256 ||
       metadata.get("config_sha256") !== identity.configHash
     ) {
-      return yield* Effect.fail(
-        appError(
-          "index_incompatible",
-          "The existing Index provenance does not match this Project.",
-        ),
+      return yield* appError(
+        "index_incompatible",
+        "The existing Index provenance does not match this Project.",
       );
     }
 
@@ -165,26 +164,26 @@ const inspectExistingIndex = Effect.fn("Index.inspectExisting")(function* (
       THEN 1 ELSE 0 END AS invalid
     `;
 
-    const integrity = yield* Schema.decodeUnknownEffect(SymbolIntegrityRows)(integrityRows).pipe(
+    const integrity = yield* Schema.decodeEffect(SymbolIntegrityRows)(integrityRows).pipe(
       Effect.mapError(() => appError("index_invalid", "The Index contains invalid data.")),
     );
 
     if (integrity[0]?.invalid !== 0) {
-      return yield* Effect.fail(appError("index_invalid", "The Index contains invalid data."));
+      return yield* appError("index_invalid", "The Index contains invalid data.");
     }
 
     const files = yield* sql<ExistingFileRow>`
       SELECT path, content_hash, parse_status, symbol_count FROM files
     `;
 
-    return yield* Schema.decodeUnknownEffect(ExistingFileRows)(files).pipe(
+    return yield* Schema.decodeEffect(ExistingFileRows)(files).pipe(
       Effect.mapError(() => appError("index_invalid", "The Index contains invalid data.")),
     );
   }).pipe(
     Effect.provide(SqliteClient.layer({ filename: indexPath, readonly: true, disableWAL: true })),
     Effect.scoped,
     Effect.mapError((error) =>
-      error instanceof AppError
+      isAppError(error)
         ? error
         : appError("index_unreadable", "The existing Index cannot be read safely."),
     ),
@@ -339,7 +338,7 @@ export const updateIndex = Effect.fn("Index.update")(function* (
       SELECT path, content_hash, parse_status, symbol_count FROM files
     `;
 
-    const decodedExisting = yield* Schema.decodeUnknownEffect(ExistingFileRows)(existingRows).pipe(
+    const decodedExisting = yield* Schema.decodeEffect(ExistingFileRows)(existingRows).pipe(
       Effect.mapError(() => appError("index_invalid", "The Index contains invalid data.")),
     );
 
@@ -364,8 +363,9 @@ export const updateIndex = Effect.fn("Index.update")(function* (
       const replacement = replacementByPath.get(current.path);
 
       if (replacement === undefined) {
-        return yield* Effect.fail(
-          appError("index_currentness_changed", "Index currentness changed during processing."),
+        return yield* appError(
+          "index_currentness_changed",
+          "Index currentness changed during processing.",
         );
       }
 
@@ -386,7 +386,7 @@ export const updateIndex = Effect.fn("Index.update")(function* (
     Effect.provide(SqliteClient.layer({ filename: indexPath })),
     Effect.scoped,
     Effect.mapError((error) =>
-      error instanceof AppError
+      isAppError(error)
         ? error
         : appError("index_update_failed", "The Index could not be updated safely."),
     ),
