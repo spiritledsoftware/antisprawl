@@ -30,7 +30,6 @@ export interface Diagnostic {
 
 export interface Project {
   readonly root: string;
-  readonly configPath: string;
   readonly configHash: string;
   readonly include: ReadonlyArray<string>;
   readonly exclude: ReadonlyArray<string>;
@@ -124,7 +123,6 @@ export const resolveProject = Effect.fn("Project.resolve")(function* (startingDi
 
       return {
         root: directory,
-        configPath,
         configHash: sha256(text),
         include: decoded.sources.include,
         exclude: decoded.sources.exclude ?? [],

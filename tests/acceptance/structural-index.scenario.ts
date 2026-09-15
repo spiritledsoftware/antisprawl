@@ -97,4 +97,4 @@ export function collectReadyJobs(jobs: ReadonlyArray<Job>): Array<Job> {
     diagnostics: [],
     findings: [],
   },
-} as const;
+};

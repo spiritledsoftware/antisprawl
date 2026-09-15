@@ -19,22 +19,17 @@ export interface StructuralRepresentation {
   readonly qgramHashes: Uint8Array;
 }
 
-const sha256 = (value: Uint8Array) => new Bun.CryptoHasher("sha256").update(value).digest("hex");
+const sha256 = (value: Uint8Array) => Bun.CryptoHasher.hash("sha256", value, "hex");
 
-const tokenDigest = (token: CanonicalToken, normalized: boolean) => {
-  const text = normalized ? token.normalized : token.text;
-
-  return new Bun.CryptoHasher("sha256")
-    .update(token.type)
-    .update("\0")
-    .update(token.role)
-    .update("\0")
-    .update(text)
-    .digest("hex");
-};
+const tokenDigest = (token: CanonicalToken, normalized: boolean) =>
+  Bun.CryptoHasher.hash(
+    "sha256",
+    `${token.type}\0${token.role}\0${normalized ? token.normalized : token.text}`,
+    "hex",
+  );
 
 const pack = (hashes: ReadonlyArray<string>) =>
-  new Uint8Array(Buffer.concat(hashes.map((hash) => Buffer.from(hash, "hex"))));
+  Buffer.concat(hashes.map((hash) => Buffer.from(hash, "hex")));
 
 export const representSymbol = (symbol: ExtractedSymbol): StructuralRepresentation => {
   // ponytail: SHA-256 per token favors a simple collision-resistant format; benchmark before using narrower hashes.
@@ -43,9 +38,7 @@ export const representSymbol = (symbol: ExtractedSymbol): StructuralRepresentati
   const qgrams = new Set<string>();
 
   for (let index = 0; index + 2 < normalizedTokens.length; index += 1) {
-    const bytes = pack(normalizedTokens.slice(index, index + 3));
-
-    qgrams.add(sha256(bytes));
+    qgrams.add(sha256(pack(normalizedTokens.slice(index, index + 3))));
   }
 
   const strictBytes = pack(strictTokens);

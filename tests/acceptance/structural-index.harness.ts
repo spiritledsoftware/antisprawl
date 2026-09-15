@@ -46,12 +46,12 @@ export const verifyStructuralIndex = Effect.fn("Acceptance.verifyStructuralIndex
   const index = new Database(indexPath, { readonly: true });
 
   expect(index.query("pragma integrity_check").get()).toEqual({ integrity_check: "ok" });
-  expect(index.query("select key, value from metadata order by key").all()).toEqual([
-    ...structuralIndexScenario.index.metadata,
-  ]);
-  expect(index.query("select * from files order by path").all()).toEqual([
-    ...structuralIndexScenario.index.files,
-  ]);
+  expect(index.query("select key, value from metadata order by key").all()).toEqual(
+    structuralIndexScenario.index.metadata,
+  );
+  expect(index.query("select * from files order by path").all()).toEqual(
+    structuralIndexScenario.index.files,
+  );
   expect(
     index
       .query(`
@@ -77,7 +77,7 @@ export const verifyStructuralIndex = Effect.fn("Acceptance.verifyStructuralIndex
           order by file_path, symbol_key
         `)
       .all(),
-  ).toEqual([...structuralIndexScenario.index.symbols]);
+  ).toEqual(structuralIndexScenario.index.symbols);
   index.close();
 
   const databaseText = new TextDecoder().decode(yield* fs.readFile(indexPath));

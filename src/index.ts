@@ -5,7 +5,6 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { AppError, appError } from "./errors.ts";
-import type { GrammarProvenance } from "./language.ts";
 import type { StructuralRepresentation } from "./representation.ts";
 import { representationVersion } from "./representation.ts";
 
@@ -55,7 +54,7 @@ export interface IndexWork {
 
 export interface IndexIdentity {
   readonly configHash: string;
-  readonly grammar: GrammarProvenance;
+  readonly grammarManifestSha256: string;
 }
 
 export interface CurrentFile {
@@ -69,25 +68,13 @@ export interface IndexedFile {
   readonly symbolCount: number;
 }
 
-interface ExistingFileRow {
-  readonly path: string;
-  readonly content_hash: string;
-  readonly parse_status: "current" | "degraded";
-  readonly symbol_count: number;
-}
+type ExistingFileRow = (typeof ExistingFileRows.Type)[number];
 
-interface VersionRow {
-  readonly user_version: number;
-}
+type VersionRow = (typeof VersionRows.Type)[number];
 
-interface NameRow {
-  readonly name: string;
-}
+type NameRow = (typeof NameRows.Type)[number];
 
-interface MetadataRow {
-  readonly key: string;
-  readonly value: string;
-}
+type MetadataRow = (typeof MetadataRows.Type)[number];
 
 const inspectExistingIndex = Effect.fn("Index.inspectExisting")(function* (
   indexPath: string,
@@ -138,7 +125,7 @@ const inspectExistingIndex = Effect.fn("Index.inspectExisting")(function* (
 
     if (
       metadata.get("representation_version") !== String(representationVersion) ||
-      metadata.get("grammar_manifest_sha256") !== identity.grammar.manifestSha256 ||
+      metadata.get("grammar_manifest_sha256") !== identity.grammarManifestSha256 ||
       metadata.get("config_sha256") !== identity.configHash
     ) {
       return yield* appError(
@@ -253,7 +240,7 @@ const initializeSchema = Effect.fn("Index.initializeSchema")(function* (identity
       `;
       yield* sql`PRAGMA user_version = 1`;
       yield* sql`INSERT OR REPLACE INTO metadata (key, value) VALUES ('config_sha256', ${identity.configHash})`;
-      yield* sql`INSERT OR REPLACE INTO metadata (key, value) VALUES ('grammar_manifest_sha256', ${identity.grammar.manifestSha256})`;
+      yield* sql`INSERT OR REPLACE INTO metadata (key, value) VALUES ('grammar_manifest_sha256', ${identity.grammarManifestSha256})`;
       yield* sql`INSERT OR REPLACE INTO metadata (key, value) VALUES ('representation_version', ${String(representationVersion)})`;
     }),
   );

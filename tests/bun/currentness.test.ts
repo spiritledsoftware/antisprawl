@@ -3,7 +3,6 @@ import { expect, spyOn, test } from "bun:test";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import * as Result from "effect/Result";
 import { Parser } from "web-tree-sitter";
 import { indexProject } from "../../src/app.ts";
 import { structuralIndexScenario } from "../acceptance/structural-index.scenario.ts";
@@ -44,18 +43,12 @@ test("a source change during parsing does not update the Index", () =>
 
         yield* fs.writeFileString(sourcePath, "export function beforeParse() { return 1; }\n");
 
-        const parseDescriptor = Object.getOwnPropertyDescriptor(Parser.prototype, "parse");
+        const parse = spyOn(Parser.prototype, "parse");
+        const originalParse = parse.getMockImplementation();
 
-        if (parseDescriptor?.value === undefined) throw new Error("Parser.parse is unavailable.");
+        if (originalParse === undefined) throw new Error("Parser.parse is unavailable.");
 
-        const originalParse: Parser["parse"] = parseDescriptor.value;
-
-        const parse = spyOn(Parser.prototype, "parse").mockImplementation(function (
-          this: Parser,
-          callback,
-          oldTree,
-          options,
-        ) {
+        parse.mockImplementation(function (this: Parser, callback, oldTree, options) {
           const write = Bun.spawnSync([
             process.execPath,
             "-e",
@@ -70,14 +63,9 @@ test("a source change during parsing does not update the Index", () =>
         });
 
         yield* Effect.gen(function* () {
-          const result = yield* Effect.result(indexProject(root));
+          const error = yield* Effect.flip(indexProject(root));
 
-          expect(Result.isFailure(result)).toBe(true);
-
-          if (Result.isFailure(result)) {
-            expect(result.failure).toMatchObject({ code: "source_changed_during_index" });
-          }
-
+          expect(error).toMatchObject({ code: "source_changed_during_index" });
           expect(yield* fs.readFile(indexPath)).toEqual(before);
         }).pipe(Effect.ensuring(Effect.sync(() => parse.mockRestore())));
 

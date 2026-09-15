@@ -1,6 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
 import * as Effect from "effect/Effect";
-import * as Result from "effect/Result";
 import { Parser } from "web-tree-sitter";
 import { loadBundledTypeScriptGrammar, parseTypeScript } from "../../src/language.ts";
 
@@ -43,11 +42,7 @@ test("TypeScript parsing releases native resources when setup fails", () => {
     Effect.gen(function* () {
       const grammar = yield* loadBundledTypeScriptGrammar();
 
-      const result = yield* Effect.result(
-        parseTypeScript({ ...grammar, query: "(" }, "export function valid() {}"),
-      );
-
-      expect(Result.isFailure(result)).toBe(true);
+      yield* Effect.flip(parseTypeScript({ ...grammar, query: "(" }, "export function valid() {}"));
       expect(remove).toHaveBeenCalledTimes(1);
     }).pipe(Effect.ensuring(Effect.sync(() => remove.mockRestore()))),
   );

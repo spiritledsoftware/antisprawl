@@ -17,15 +17,7 @@ const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
 
 const identity: IndexIdentity = {
   configHash: "config",
-  grammar: {
-    language: "typescript",
-    runtime: "0.27.0",
-    parserCommit: "parser",
-    parserAbi: 14,
-    wasmSha256: "wasm",
-    querySha256: "query",
-    manifestSha256: "manifest",
-  },
+  grammarManifestSha256: "manifest",
 };
 
 const symbol = (key: string): StructuralRepresentation => ({

@@ -45,7 +45,6 @@ test("the nearest Project uses same-directory config precedence", () =>
 
         expect(project).toMatchObject({
           root,
-          configPath: paths.join(root, ".antisprawl/config.jsonc"),
           include: ["chosen/**/*.ts"],
           exclude: [],
           diagnostics: [
@@ -82,7 +81,6 @@ test("source discovery includes TypeScript and declaration extensions only", () 
 
         const project: Project = {
           root,
-          configPath: paths.join(root, ".antisprawl/config.jsonc"),
           configHash: "test",
           include: ["*"],
           exclude: ["excluded.ts"],
@@ -119,7 +117,6 @@ test("source includes cannot escape the Project", () =>
 
         const project: Project = {
           root,
-          configPath: paths.join(root, ".antisprawl/config.jsonc"),
           configHash: "test",
           include: ["../outside/**/*.ts"],
           exclude: [],
@@ -153,7 +150,6 @@ test("source symlinks cannot escape the Project", () =>
 
         const project: Project = {
           root,
-          configPath: paths.join(root, ".antisprawl/config.jsonc"),
           configHash: "test",
           include: ["linked/**/*.ts"],
           exclude: [],
@@ -186,7 +182,6 @@ test("glob adapter paths preserve literal POSIX backslashes", () => {
 
         const project: Project = {
           root,
-          configPath: paths.join(root, ".antisprawl/config.jsonc"),
           configHash: "test",
           include: ["*.ts"],
           exclude: [],

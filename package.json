@@ -17,7 +17,6 @@
   },
   "dependencies": {
     "@effect/platform-bun": "4.0.0-rc.115",
-    "@effect/platform-node-shared": "4.0.0-rc.115",
     "@effect/sql-sqlite-bun": "4.0.0-rc.115",
     "effect": "^4.0.0-rc.115",
     "web-tree-sitter": "0.27.0"
@@ -31,7 +30,6 @@
     "oxfmt": "^0.68.0",
     "oxlint": "1.82.0",
     "oxlint-tsgolint": "7.0.2001",
-    "tree-sitter-cli": "0.27.0",
     "typescript": "^7.0.2"
   },
   "devEngines": {

@@ -51,7 +51,12 @@ export const indexProject = Effect.fn("App.indexProject")(function* (startingDir
   const fs = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;
   const indexPath = paths.join(project.root, ".antisprawl/index.sqlite");
-  const identity = { configHash: project.configHash, grammar: grammar.provenance };
+
+  const identity = {
+    configHash: project.configHash,
+    grammarManifestSha256: grammar.provenance.manifestSha256,
+  };
+
   const indexedFiles = yield* readIndexedFiles(indexPath, identity);
   const currentFiles: Array<CurrentFile> = [];
   const replacements: Array<FileRecord> = [];
