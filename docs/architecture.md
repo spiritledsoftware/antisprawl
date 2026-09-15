@@ -1,6 +1,6 @@
 # Antisprawl Architecture
 
-> **Status:** Accepted design, pre-implementation
+> **Status:** Accepted design; the issue #15 TypeScript Structural Index slice is implemented
 >
 > **Target release:** `0.1.0`
 >
@@ -37,11 +37,15 @@ Antisprawl is advisory. It does not prove semantic equivalence, automatically re
 
 Cross-language discovery is an opt-in experiment within one project, not part of the primary duplicate detector.
 
+### Current implementation boundary
+
+Issue #15 implements only the public `index` command in Structural-only mode: Project discovery, embedded verified TypeScript parsing, source-free Structural representations, and the SQLite Index. `check`, Findings, embeddings, grammar downloads, watchers, harness adapters, other languages, and release packaging remain later work. Sections describing those capabilities are target architecture, not claims about the current executable.
+
 ## 2. Terms
 
 | Term                       | Meaning                                                                                                                           |
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| **Project**                | The directory containing `.antisprawl/config.json`.                                                                               |
+| **Project**                | The nearest ancestor directory containing one of the supported Antisprawl configuration files.                                    |
 | **Symbol**                 | A named function, method, or named closure/arrow function extracted from a supported grammar.                                     |
 | **Probable duplicate**     | A same-language, meaningful-size symbol pair whose semantic and structural evidence passes configured gates.                      |
 | **Related implementation** | An opt-in, lower-confidence cross-language match that may reveal duplicated responsibility but cannot usually be reused directly. |
@@ -82,13 +86,13 @@ The executable is the only execution interface. Pi, Codex, Claude, skills, and s
 
 ```text
 .antisprawl/
-├── config.json       # committed JSONC policy and resolved grammar pins
-└── index.sqlite      # disposable, ignored index
+├── config.jsonc      # preferred committed JSONC policy
+└── index.sqlite      # disposable, ignored Index
 ```
 
-`init` adds `.antisprawl/index.sqlite*` to the applicable ignore file with confirmation. The glob also excludes SQLite WAL and shared-memory files.
+A command searches ancestor directories nearest-first. In the first directory containing configuration, precedence is `.antisprawl/config.jsonc`, `.antisprawl/config.json`, `.antisprawl.jsonc`, then `.antisprawl.json`. Only the winner is loaded; same-directory alternatives produce warnings and parent Project configurations are not merged. Source paths remain relative to this root, and discovery rejects lexical or symlink escapes.
 
-A command finds its root by searching ancestors for `.antisprawl/config.json`. `init` uses its current working directory. Git is optional: when available it accelerates file discovery and reconciliation; otherwise Antisprawl uses configured globs and content hashes.
+The future `init` command will add `.antisprawl/index.sqlite*` to the applicable ignore file with confirmation. Git is optional: when available it can accelerate later file discovery and reconciliation; issue #15 uses configured globs and content hashes.
 
 ### 4.2 Public CLI
 
@@ -112,7 +116,7 @@ There is no public library interface in v1. The CLI JSON protocol is the externa
 
 ### 4.3 Configuration
 
-`.antisprawl/config.json` accepts JSONC comments and trailing commas. `$schema` is optional. `init` writes `version: 1`; a missing version means v1 with a warning, while an unsupported future version is an error.
+The selected configuration file accepts JSONC comments and trailing commas regardless of its `.json` or `.jsonc` suffix. `$schema` is optional. The future `init` command writes `version: 1`; a missing version means v1 with a warning, while an unsupported future version is an error. Omitted `embedding` selects Structural-only mode; issue #15 rejects explicitly configured providers because provider support is outside this slice.
 
 Unknown keys produce warnings and are preserved. Wrong value types and contradictory settings are errors. CLI mutations use targeted JSONC edits so comments, formatting, ordering, and unknown keys survive.
 
@@ -201,7 +205,7 @@ Translate native session and hook events into CLI invocations, then translate fi
 
 ## 6. Effect v4 beta runtime
 
-Effect v4 beta is a required runtime foundation, not an incidental dependency. Effect owns CLI orchestration, configuration decoding, filesystem and provider access, database operations, retries, concurrency, cancellation, scopes, and watcher lifecycle. Parsing, representation, similarity math, and ranking remain ordinary pure TypeScript.
+Effect v4 beta is a required runtime foundation, not an incidental dependency. The repository records Bun `1.4.2` in `devEngines.packageManager`; source execution and compilation reject a different Bun runtime. Effect owns CLI orchestration, configuration decoding, filesystem and database operations in issue #15, with later runtime responsibilities added only by their implementation tickets. Parsing and representation remain ordinary TypeScript.
 
 Every directly declared Effect-family package is pinned exactly to `4.0.0-beta.107`, and the lockfile fixes the transitive graph:
 
@@ -228,13 +232,13 @@ Effect-family upgrades are atomic changes that run the full verification suite. 
 
 Tree-sitter provides incremental concrete syntax trees, not a language-independent semantic model. Every supported language therefore needs a verified symbol query that maps grammar-specific nodes into the common symbol record.
 
-V1 verifies JavaScript/TypeScript, Python, Go, Rust, and Java. A language is supported only when its parser asset, compatible symbol query, extraction fixtures, and detector fixtures pass acceptance tests. Unknown or ambiguous languages are skipped visibly rather than guessed.
+Issue #15 verifies TypeScript `.ts`, `.mts`, and `.cts` sources, including their declaration variants. TSX, JavaScript, and other target languages remain deferred. A language is supported only when its parser asset, compatible Symbol query, extraction fixtures, and detector fixtures pass acceptance tests. Unknown or ambiguous languages are skipped visibly rather than guessed.
 
-Antisprawl uses the Neovim Tree-sitter registry for language discovery instead of maintaining a competing catalog. On installation it resolves exact parser and query revisions, downloads compatible WASM/query assets, verifies their digests, and records the pins in project configuration. Existing pins never follow `latest`; updates require `antisprawl index --update-grammars`.
+The initial TypeScript bootstrap embeds the official `tree-sitter-typescript` v0.23.2 WASM, the pinned Symbol query, and a provenance manifest in both source and compiled execution. Size and SHA-256 are verified before load, ABI compatibility is checked, and the Language module consumes one resolved `{ bytes, query, provenance }` value. This embedded path supersedes lazy installation for the issue #15 TypeScript slice without constraining the later design: a verified downloader/cache can provide that same resolved value when grammar updates are implemented.
 
-Grammar assets are lazily installed into the platform user cache. The cache key includes language, parser/query revisions, runtime/ABI version, and digests. Writes are verified and atomic. The installer treats parser WASM as executable input: sources are restricted, assets are size-bounded and checksum-verified, and parsing is resource-bounded.
+The target architecture uses the Neovim Tree-sitter registry for future language discovery instead of maintaining a competing catalog. Existing pins never follow `latest`; updates will require the later `antisprawl index --update-grammars` command. Future cache writes must remain verified and atomic because parser WASM is executable input.
 
-Both `index` and `check` may invoke the lazy installer. A hook that cannot finish installation within its deadline fails open; explicit indexing can complete it later.
+Future `index` and `check` commands may invoke the lazy installer. A hook that cannot finish installation within its deadline will fail open; explicit indexing can complete it later.
 
 Only a file's primary language is parsed in v1. Configured path-glob overrides resolve ambiguous extensions. Embedded regions such as JavaScript inside HTML are deferred. Symbols containing Tree-sitter `ERROR` or `MISSING` nodes are skipped, counted in `status`, and retried when their file changes.
 
@@ -422,7 +426,7 @@ No MCP server is included in v1 because it would duplicate the CLI without provi
 
 ## 16. Build and distribution
 
-Antisprawl is implemented in TypeScript on Effect `4.0.0-beta.107` and built with a pinned Bun toolchain. The process enters through `BunRuntime.runMain` from the matching `@effect/platform-bun` package. `bun build --compile` produces one executable per operating-system/architecture target; there is no universal binary. Harnesses spawn the executable and never import Bun- or Effect-specific code.
+Antisprawl is implemented in TypeScript on Effect `4.0.0-beta.107` and built with Bun `1.4.2`, recorded in `devEngines.packageManager`. The process enters through `BunRuntime.runMain` from the matching `@effect/platform-bun` package. `bun build --compile` produces one executable per operating-system/architecture target; there is no universal binary. Harnesses spawn the executable and never import Bun- or Effect-specific code.
 
 Initial release targets are:
 

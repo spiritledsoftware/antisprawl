@@ -10,11 +10,10 @@
     "lint:fix": "oxlint --fix",
     "lint:staged": "lint-staged",
     "prepare": "husky",
-    "check:bun": "bun scripts/require-bun-version.ts",
-    "build": "bun run check:bun && bun build --compile src/main.ts --outfile dist/antisprawl",
-    "test": "bun run check:bun && vitest run && bun test",
-    "test:vitest": "bun run check:bun && vitest run",
-    "test:bun": "bun run check:bun && bun test",
+    "build": "bun build --compile src/main.ts --outfile dist/antisprawl",
+    "test": "vitest run && bun test tests/bun tests/acceptance",
+    "test:vitest": "vitest run",
+    "test:bun": "bun test tests/bun tests/acceptance",
     "typecheck": "tsc --noEmit",
     "verify": "bun run format:check && bun run lint && bun run typecheck && bun run test"
   },
@@ -38,5 +37,11 @@
     "typescript": "^7.0.2",
     "vitest": "4.1.11"
   },
-  "packageManager": "bun@1.4.2"
+  "devEngines": {
+    "packageManager": {
+      "name": "bun",
+      "version": "1.4.2",
+      "onFail": "error"
+    }
+  }
 }

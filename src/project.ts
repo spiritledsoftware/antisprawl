@@ -157,16 +157,45 @@ export const discoverSourcePaths = Effect.fn("Project.discoverSources")(function
   project: Project,
 ) {
   const fs = yield* FileSystem.FileSystem;
+  const paths = yield* Path.Path;
+  const root = paths.resolve(project.root);
+
+  const realRoot = yield* fs
+    .realPath(root)
+    .pipe(Effect.mapError(() => appError("project_unreadable", "The Project cannot be read.")));
+
   const matches = new Set<string>();
 
+  const isInside = (parent: string, child: string) => {
+    const relative = paths.relative(parent, child);
+
+    return (
+      relative !== ".." && !relative.startsWith(`..${paths.sep}`) && !paths.isAbsolute(relative)
+    );
+  };
+
   for (const include of project.include) {
-    const paths = yield* fs.glob(include, {
-      root: project.root,
+    const discovered = yield* fs.glob(include, {
+      root,
       exclude: [".antisprawl/**", ...project.exclude],
     });
 
-    for (const path of paths) {
-      if (isTypeScriptPath(path)) matches.add(path.replaceAll("\\", "/"));
+    for (const path of discovered) {
+      if (!isTypeScriptPath(path)) continue;
+
+      const absolutePath = paths.resolve(root, path);
+
+      const realPath = yield* fs
+        .realPath(absolutePath)
+        .pipe(Effect.mapError(() => appError("source_unreadable", `Cannot read ${path}.`)));
+
+      if (!isInside(root, absolutePath) || !isInside(realRoot, realPath)) {
+        return yield* Effect.fail(
+          appError("source_outside_project", `Source path ${path} escapes the Project.`),
+        );
+      }
+
+      matches.add(paths.relative(root, absolutePath).split(paths.sep).join("/"));
     }
   }
 

@@ -15,6 +15,7 @@ const ExistingFileRows = Schema.Array(
   Schema.Struct({
     path: Schema.String,
     content_hash: Schema.String,
+    parse_status: Schema.Literals(["current", "degraded"]),
     symbol_count: Schema.Number,
   }),
 );
@@ -29,6 +30,8 @@ const MetadataRows = Schema.Array(
     value: Schema.String,
   }),
 );
+
+const SymbolIntegrityRows = Schema.Array(Schema.Struct({ invalid: Schema.Number }));
 
 export interface FileRecord {
   readonly path: string;
@@ -48,14 +51,26 @@ export interface IndexWork {
   };
 }
 
-interface IndexIdentity {
+export interface IndexIdentity {
   readonly configHash: string;
   readonly grammar: GrammarProvenance;
+}
+
+export interface CurrentFile {
+  readonly path: string;
+  readonly contentHash: string;
+}
+
+export interface IndexedFile {
+  readonly contentHash: string;
+  readonly parseStatus: "current" | "degraded";
+  readonly symbolCount: number;
 }
 
 interface ExistingFileRow {
   readonly path: string;
   readonly content_hash: string;
+  readonly parse_status: "current" | "degraded";
   readonly symbol_count: number;
 }
 
@@ -78,7 +93,7 @@ const inspectExistingIndex = Effect.fn("Index.inspectExisting")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
 
-  if (!(yield* fs.exists(indexPath))) return;
+  if (!(yield* fs.exists(indexPath))) return [];
 
   const inspect = Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -132,6 +147,39 @@ const inspectExistingIndex = Effect.fn("Index.inspectExisting")(function* (
         ),
       );
     }
+
+    const integrityRows = yield* sql<{ invalid: number }>`
+      SELECT CASE WHEN
+        EXISTS (
+          SELECT 1
+          FROM files
+          WHERE symbol_count != (
+            SELECT COUNT(*) FROM symbols WHERE file_path = files.path
+          )
+        ) OR EXISTS (
+          SELECT 1
+          FROM symbols
+          LEFT JOIN files ON files.path = symbols.file_path
+          WHERE files.path IS NULL
+        )
+      THEN 1 ELSE 0 END AS invalid
+    `;
+
+    const integrity = yield* Schema.decodeUnknownEffect(SymbolIntegrityRows)(integrityRows).pipe(
+      Effect.mapError(() => appError("index_invalid", "The Index contains invalid data.")),
+    );
+
+    if (integrity[0]?.invalid !== 0) {
+      return yield* Effect.fail(appError("index_invalid", "The Index contains invalid data."));
+    }
+
+    const files = yield* sql<ExistingFileRow>`
+      SELECT path, content_hash, parse_status, symbol_count FROM files
+    `;
+
+    return yield* Schema.decodeUnknownEffect(ExistingFileRows)(files).pipe(
+      Effect.mapError(() => appError("index_invalid", "The Index contains invalid data.")),
+    );
   }).pipe(
     Effect.provide(SqliteClient.layer({ filename: indexPath, readonly: true, disableWAL: true })),
     Effect.scoped,
@@ -142,7 +190,25 @@ const inspectExistingIndex = Effect.fn("Index.inspectExisting")(function* (
     ),
   );
 
-  yield* inspect;
+  return yield* inspect;
+});
+
+export const readIndexedFiles = Effect.fn("Index.readIndexedFiles")(function* (
+  indexPath: string,
+  identity: IndexIdentity,
+) {
+  const rows = yield* inspectExistingIndex(indexPath, identity);
+
+  return new Map<string, IndexedFile>(
+    rows.map((row) => [
+      row.path,
+      {
+        contentHash: row.content_hash,
+        parseStatus: row.parse_status,
+        symbolCount: row.symbol_count,
+      },
+    ]),
+  );
 });
 
 const initializeSchema = Effect.fn("Index.initializeSchema")(function* (identity: IndexIdentity) {
@@ -249,7 +315,8 @@ const replaceFile = Effect.fn("Index.replaceFile")(function* (file: FileRecord) 
 export const updateIndex = Effect.fn("Index.update")(function* (
   indexPath: string,
   identity: IndexIdentity,
-  files: ReadonlyArray<FileRecord>,
+  currentFiles: ReadonlyArray<CurrentFile>,
+  replacements: ReadonlyArray<FileRecord>,
 ) {
   yield* inspectExistingIndex(indexPath, identity);
 
@@ -269,7 +336,7 @@ export const updateIndex = Effect.fn("Index.update")(function* (
     yield* initializeSchema(identity);
 
     const existingRows = yield* sql<ExistingFileRow>`
-      SELECT path, content_hash, symbol_count FROM files
+      SELECT path, content_hash, parse_status, symbol_count FROM files
     `;
 
     const decodedExisting = yield* Schema.decodeUnknownEffect(ExistingFileRows)(existingRows).pipe(
@@ -278,24 +345,33 @@ export const updateIndex = Effect.fn("Index.update")(function* (
 
     const existing = new Map(decodedExisting.map((row) => [row.path, row]));
 
-    const currentPaths = new Set(files.map((file) => file.path));
+    const currentPaths = new Set(currentFiles.map((file) => file.path));
+    const replacementByPath = new Map(replacements.map((file) => [file.path, file]));
     let indexedFiles = 0;
     let reusedFiles = 0;
     let indexedSymbols = 0;
     let reusedSymbols = 0;
 
-    for (const file of files) {
-      const previous = existing.get(file.path);
+    for (const current of currentFiles) {
+      const previous = existing.get(current.path);
 
-      if (previous?.content_hash === file.contentHash) {
+      if (previous?.content_hash === current.contentHash) {
         reusedFiles += 1;
         reusedSymbols += previous.symbol_count;
         continue;
       }
 
-      yield* replaceFile(file);
+      const replacement = replacementByPath.get(current.path);
+
+      if (replacement === undefined) {
+        return yield* Effect.fail(
+          appError("index_currentness_changed", "Index currentness changed during processing."),
+        );
+      }
+
+      yield* replaceFile(replacement);
       indexedFiles += 1;
-      indexedSymbols += file.symbols.length;
+      indexedSymbols += replacement.symbols.length;
     }
 
     for (const path of existing.keys()) {

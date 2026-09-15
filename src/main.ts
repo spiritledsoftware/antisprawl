@@ -7,7 +7,7 @@ import * as Command from "effect/unstable/cli/Command";
 import { indexProject } from "./app.ts";
 import { appError } from "./errors.ts";
 
-const expectedBunVersion = packageJson.packageManager.match(/^bun@(.+)$/)?.[1];
+const expectedBunVersion = packageJson.devEngines.packageManager.version;
 
 const index = Command.make("index", {}, () =>
   Effect.gen(function* () {

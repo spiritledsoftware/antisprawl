@@ -4,7 +4,7 @@ import manifestPath from "../assets/grammars/typescript/manifest.jsonc" with { t
 import queryPath from "../assets/grammars/typescript/symbols.scm" with { type: "file" };
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { Language, Parser, Query, type Node } from "web-tree-sitter";
+import { Language, Parser, Query, type Node, type Tree } from "web-tree-sitter";
 import { appError } from "./errors.ts";
 
 const ManifestSchema = Schema.Struct({
@@ -80,7 +80,7 @@ export const loadBundledTypeScriptGrammar = Effect.fn("Language.loadBundledTypeS
     const manifestText = yield* Effect.promise(() => Bun.file(manifestPath).text());
 
     const manifest = yield* Schema.decodeUnknownEffect(ManifestSchema)(
-      JSON.parse(manifestText),
+      Bun.JSONC.parse(manifestText),
     ).pipe(
       Effect.mapError(() =>
         appError("grammar_manifest_invalid", "Invalid TypeScript grammar manifest."),
@@ -319,58 +319,55 @@ export const parseTypeScript = Effect.fn("Language.parseTypeScript")(function* (
       }
 
       const parser = new Parser();
-      const query = new Query(language, grammar.query);
+      let query: Query | undefined;
+      let tree: Tree | null = null;
 
-      parser.setLanguage(language);
+      try {
+        query = new Query(language, grammar.query);
+        parser.setLanguage(language);
+        tree = parser.parse(source);
 
-      const tree = parser.parse(source);
+        if (tree === null) throw new Error("Parser returned no tree.");
 
-      if (tree === null) {
-        query.delete();
+        const symbols: Array<ExtractedSymbol> = [];
+
+        for (const match of query.matches(tree.rootNode)) {
+          const symbol = match.captures.find((capture) => capture.name === "symbol")?.node;
+          const nameNode = match.captures.find((capture) => capture.name === "name")?.node;
+
+          if (symbol === undefined || nameNode === undefined || symbol.hasError) continue;
+
+          const name = symbolName(nameNode);
+
+          if (name === undefined) continue;
+
+          const record = recordNode(symbol);
+
+          const qualifiedName = [...ownersFor(symbol), name].join(".");
+          const body = symbol.childForFieldName("body");
+          const kind = symbolKind(symbol);
+
+          symbols.push({
+            key: `${qualifiedName}\0${kind}\0${record.startIndex}:${record.endIndex}`,
+            qualifiedName,
+            kind,
+            startByte: record.startIndex,
+            endByte: record.endIndex,
+            startRow: record.startPosition.row,
+            startColumn: record.startPosition.column,
+            endRow: record.endPosition.row,
+            endColumn: record.endPosition.column,
+            bodyTokenCount: body === null ? 0 : tokensFor(body).length,
+            tokens: tokensFor(record),
+          });
+        }
+
+        return { symbols, hasError: tree.rootNode.hasError } satisfies ParsedFile;
+      } finally {
+        tree?.delete();
+        query?.delete();
         parser.delete();
-        throw new Error("Parser returned no tree.");
       }
-
-      const symbols: Array<ExtractedSymbol> = [];
-
-      for (const match of query.matches(tree.rootNode)) {
-        const symbol = match.captures.find((capture) => capture.name === "symbol")?.node;
-        const nameNode = match.captures.find((capture) => capture.name === "name")?.node;
-
-        if (symbol === undefined || nameNode === undefined || symbol.hasError) continue;
-
-        const name = symbolName(nameNode);
-
-        if (name === undefined) continue;
-
-        const record = recordNode(symbol);
-
-        const qualifiedName = [...ownersFor(symbol), name].join(".");
-        const body = symbol.childForFieldName("body");
-        const kind = symbolKind(symbol);
-
-        symbols.push({
-          key: `${qualifiedName}\0${kind}\0${record.startIndex}:${record.endIndex}`,
-          qualifiedName,
-          kind,
-          startByte: record.startIndex,
-          endByte: record.endIndex,
-          startRow: record.startPosition.row,
-          startColumn: record.startPosition.column,
-          endRow: record.endPosition.row,
-          endColumn: record.endPosition.column,
-          bodyTokenCount: body === null ? 0 : tokensFor(body).length,
-          tokens: tokensFor(record),
-        });
-      }
-
-      const result = { symbols, hasError: tree.rootNode.hasError } satisfies ParsedFile;
-
-      tree.delete();
-      query.delete();
-      parser.delete();
-
-      return result;
     },
     catch: () =>
       appError("typescript_parse_failed", "The TypeScript grammar could not parse the file."),
