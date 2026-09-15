@@ -31,4 +31,13 @@ describe("Structural representation", () => {
     expect(first.qgramHashes).toEqual(renamed.qgramHashes);
     expect(new TextDecoder().decode(first.orderedTokenHashes)).not.toContain("ready");
   });
+
+  it("builds a versioned comment-free Embedding input", () => {
+    const represented = representSymbol(symbol("ready", "1"));
+
+    expect(represented.embeddingInput).toBe("typescript\nready + 1");
+    expect(represented.embeddingHash).toBe(
+      "2ac9e1f659f7d3daff9a9ef948660be29683d3ecf0cc62e4fd164cbaf51c047c",
+    );
+  });
 });

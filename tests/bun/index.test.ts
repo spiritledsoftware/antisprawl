@@ -4,7 +4,16 @@ import { expect, test } from "bun:test";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import { readIndex, updateIndex, type FileRecord, type IndexIdentity } from "../../src/index.ts";
+import type { Profile } from "../../src/embedding.ts";
+import {
+  activateProfile,
+  completeProfile,
+  persistEmbeddingBatch,
+  readIndex,
+  updateIndex,
+  type FileRecord,
+  type IndexIdentity,
+} from "../../src/index.ts";
 import type { StructuralRepresentation } from "../../src/representation.ts";
 
 const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
@@ -15,6 +24,17 @@ const identity: IndexIdentity = {
   grammarManifestSha256: "manifest",
   detectorVersion: 1,
   structuralPolicyVersion: 1,
+};
+
+const profile: Profile = {
+  provider: "deterministic",
+  model: "acceptance-v1",
+  dimensions: 2,
+  language: "typescript",
+  representation: 1,
+  detector: 2,
+  semanticThreshold: 0.85,
+  calibration: "calibrated",
 };
 
 const symbol = (key: string): StructuralRepresentation => ({
@@ -32,6 +52,7 @@ const symbol = (key: string): StructuralRepresentation => ({
   normalizedHash: "02".repeat(32),
   orderedTokenHashes: new Uint8Array(32).fill(1),
   qgramHashes: new Uint8Array(),
+  embeddingHash: "03".repeat(32),
 });
 
 const file = (
@@ -187,6 +208,199 @@ test("Index snapshots expose current Symbols and count removals", () =>
         expect(yield* updateIndex(indexPath, identity, [], [])).toEqual({
           files: { indexed: 0, reused: 0, removed: 1 },
           symbols: { indexed: 0, reused: 0, removed: 1 },
+        });
+      }),
+    ),
+  ));
+
+test("complete embedding batches are durable and threshold changes reuse vectors", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const paths = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-vectors-" });
+        const indexPath = paths.join(root, "index.sqlite");
+        const represented = symbol("current");
+
+        yield* updateIndex(
+          indexPath,
+          identity,
+          [{ path: "src/example.ts", contentHash: "current" }],
+          [file("current", [{ ...represented, tokenCount: 20 }])],
+        );
+        yield* activateProfile(indexPath, identity, profile);
+
+        expect(
+          yield* persistEmbeddingBatch(indexPath, identity, profile, {
+            vectors: [{ hash: represented.embeddingHash, vector: new Float32Array([1, -2.5]) }],
+            usage: { requests: 1, inputs: 1, inputTokens: 7, durationMs: 3 },
+          }),
+        ).toEqual({ indexed: 1, reused: 0 });
+
+        const partial = yield* readIndex(indexPath, identity);
+
+        expect(partial.profile).toMatchObject({
+          ...profile,
+          complete: false,
+          usage: { requests: 1, inputs: 1, inputTokens: 7, durationMs: 3 },
+        });
+        expect([...partial.vectors.get(represented.embeddingHash)!]).toEqual([1, -2.5]);
+        expect(yield* completeProfile(indexPath, identity, profile)).toEqual({ removed: 0 });
+        expect((yield* readIndex(indexPath, identity)).profile?.complete).toBe(true);
+
+        const rescored = { ...profile, semanticThreshold: 0.9 };
+
+        yield* activateProfile(indexPath, identity, rescored);
+        expect(yield* completeProfile(indexPath, identity, rescored)).toEqual({ removed: 0 });
+        expect([...(yield* readIndex(indexPath, identity)).vectors.keys()]).toEqual([
+          represented.embeddingHash,
+        ]);
+      }),
+    ),
+  ));
+
+test("different models never mix vectors even when dimensions match", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const paths = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-vectors-" });
+        const indexPath = paths.join(root, "index.sqlite");
+        const represented = { ...symbol("current"), tokenCount: 20 };
+        const nextProfile = { ...profile, model: "acceptance-v2" };
+
+        yield* updateIndex(
+          indexPath,
+          identity,
+          [{ path: "src/example.ts", contentHash: "current" }],
+          [file("current", [represented])],
+        );
+        yield* activateProfile(indexPath, identity, profile);
+        yield* persistEmbeddingBatch(indexPath, identity, profile, {
+          vectors: [{ hash: represented.embeddingHash, vector: new Float32Array([1, 0]) }],
+          usage: { requests: 1, inputs: 1, inputTokens: 1, durationMs: 1 },
+        });
+        yield* completeProfile(indexPath, identity, profile);
+        yield* activateProfile(indexPath, identity, nextProfile);
+
+        expect((yield* readIndex(indexPath, identity)).vectors.size).toBe(0);
+
+        yield* persistEmbeddingBatch(indexPath, identity, nextProfile, {
+          vectors: [{ hash: represented.embeddingHash, vector: new Float32Array([0, 1]) }],
+          usage: { requests: 1, inputs: 1, inputTokens: 1, durationMs: 1 },
+        });
+        yield* completeProfile(indexPath, identity, nextProfile);
+
+        const database = new Database(indexPath, { readonly: true });
+
+        expect(database.query("select count(*) as count from vectors").get()).toEqual({ count: 1 });
+        database.close();
+        expect([...(yield* readIndex(indexPath, identity)).vectors.values()][0]).toEqual(
+          new Float32Array([0, 1]),
+        );
+      }),
+    ),
+  ));
+
+test("structural changes mark a complete Profile partial before replacing Symbols", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const paths = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-vectors-" });
+        const indexPath = paths.join(root, "index.sqlite");
+        const oldSymbol = { ...symbol("old"), tokenCount: 20 };
+
+        const newSymbol = {
+          ...symbol("new"),
+          tokenCount: 20,
+          embeddingHash: "04".repeat(32),
+        };
+
+        yield* updateIndex(
+          indexPath,
+          identity,
+          [{ path: "src/example.ts", contentHash: "old" }],
+          [file("old", [oldSymbol])],
+        );
+        yield* activateProfile(indexPath, identity, profile);
+        yield* persistEmbeddingBatch(indexPath, identity, profile, {
+          vectors: [{ hash: oldSymbol.embeddingHash, vector: new Float32Array([1, 0]) }],
+          usage: { requests: 1, inputs: 1, inputTokens: 1, durationMs: 1 },
+        });
+        yield* completeProfile(indexPath, identity, profile);
+
+        yield* updateIndex(
+          indexPath,
+          identity,
+          [{ path: "src/example.ts", contentHash: "new" }],
+          [file("new", [newSymbol])],
+        );
+
+        const changed = yield* readIndex(indexPath, identity);
+
+        expect(changed.profile?.complete).toBe(false);
+        expect(changed.symbols[0]?.embeddingHash).toBe(newSymbol.embeddingHash);
+      }),
+    ),
+  ));
+
+test("an invalid embedding batch changes neither vectors nor usage", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const paths = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-vectors-" });
+        const indexPath = paths.join(root, "index.sqlite");
+
+        yield* updateIndex(indexPath, identity, [], []);
+        yield* activateProfile(indexPath, identity, profile);
+
+        const error = yield* Effect.flip(
+          persistEmbeddingBatch(indexPath, identity, profile, {
+            vectors: [{ hash: "04".repeat(32), vector: new Float32Array([Number.NaN, 0]) }],
+            usage: { requests: 1, inputs: 1, inputTokens: 1, durationMs: 1 },
+          }),
+        );
+
+        expect(error).toMatchObject({ code: "embedding_vector_non_finite" });
+        const snapshot = yield* readIndex(indexPath, identity);
+
+        expect(snapshot.vectors.size).toBe(0);
+        expect(snapshot.profile?.usage).toEqual({
+          requests: 0,
+          inputs: 0,
+          inputTokens: 0,
+          durationMs: 0,
+        });
+      }),
+    ),
+  ));
+
+test("invalid persisted Profile semantics are rejected", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const paths = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-profile-" });
+        const indexPath = paths.join(root, "index.sqlite");
+
+        yield* updateIndex(indexPath, identity, [], []);
+        yield* activateProfile(indexPath, identity, profile);
+
+        const database = new Database(indexPath);
+
+        database.run("pragma ignore_check_constraints = on");
+        database.run("update profile set semantic_threshold = 2");
+        database.close();
+
+        expect(yield* Effect.flip(readIndex(indexPath, identity))).toMatchObject({
+          code: "index_invalid",
         });
       }),
     ),

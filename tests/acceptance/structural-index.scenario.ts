@@ -32,7 +32,7 @@ export function collectReadyJobs(jobs: ReadonlyArray<Job>): Array<Job> {
         key: "config_sha256",
         value: "c4b3a8b48391ca12c10066a7bb608e73ba85ba76656d71b2401b015ee12b28e1",
       },
-      { key: "detector_version", value: "1" },
+      { key: "detector_version", value: "2" },
       {
         key: "grammar_manifest_sha256",
         value: "04472408d1f5ff4ca99ece2a2139354ad7551fe63662811038a2c0bcbd3a7c56",
@@ -68,12 +68,14 @@ export function collectReadyJobs(jobs: ReadonlyArray<Job>): Array<Job> {
         ordered_bytes: 2208,
         qgram_type: "blob",
         qgram_bytes: 1856,
+        embedding_hash: "7107342e74fb241498bdaa32a16279a4de91036ec353ea8ac061e52333327617",
       },
     ],
   },
   firstOutput: {
     protocolVersion: 1,
     command: "index",
+    analysis: { mode: "structural_only" },
     coverage: {
       status: "complete",
       files: { total: 1, current: 1, failed: 0 },
@@ -81,10 +83,11 @@ export function collectReadyJobs(jobs: ReadonlyArray<Job>): Array<Job> {
     work: {
       files: { indexed: 1, reused: 0, removed: 0 },
       symbols: { indexed: 1, reused: 0, removed: 0 },
+      vectors: { indexed: 0, reused: 0, removed: 0 },
     },
     provenance: {
       bun: "1.4.2",
-      indexSchema: 2,
+      indexSchema: 3,
       representation: 1,
       grammar: {
         language: "typescript",
@@ -95,7 +98,7 @@ export function collectReadyJobs(jobs: ReadonlyArray<Job>): Array<Job> {
         querySha256: "19aac740c43842509516d27f857691d83d5db89ee3039d2cdc1290e015789ce0",
         manifestSha256: "04472408d1f5ff4ca99ece2a2139354ad7551fe63662811038a2c0bcbd3a7c56",
       },
-      detector: 1,
+      detector: 2,
       structuralPolicy: {
         version: 1,
         minimumTokens: 20,

@@ -75,6 +75,7 @@ test("a source change during parsing does not update the Index", () =>
         expect(output.work).toEqual({
           files: { indexed: 1, reused: 0, removed: 0 },
           symbols: { indexed: 1, reused: 0, removed: 1 },
+          vectors: { indexed: 0, reused: 0, removed: 0 },
         });
       }),
     ),
@@ -204,6 +205,7 @@ test("unchanged content hashes skip TypeScript reprocessing", () =>
           expect(output.work).toEqual({
             files: { indexed: 0, reused: 1, removed: 0 },
             symbols: { indexed: 0, reused: 1, removed: 0 },
+            vectors: { indexed: 0, reused: 0, removed: 0 },
           });
         }).pipe(Effect.ensuring(Effect.sync(() => parse.mockRestore())));
       }),

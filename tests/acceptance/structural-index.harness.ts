@@ -18,6 +18,7 @@ const CheckOutput = Schema.fromJsonString(
     work: Schema.Struct({
       files: Schema.Struct({ indexed: Schema.Int, reused: Schema.Int, removed: Schema.Int }),
       symbols: Schema.Struct({ indexed: Schema.Int, reused: Schema.Int, removed: Schema.Int }),
+      vectors: Schema.Struct({ indexed: Schema.Int, reused: Schema.Int, removed: Schema.Int }),
     }),
     diagnostics: Schema.Array(
       Schema.Struct({
@@ -45,7 +46,10 @@ export interface CommandResult {
 export type CommandRunner = (
   projectRoot: string,
   arguments_: ReadonlyArray<string>,
+  environment?: Readonly<Record<string, string>>,
 ) => CommandResult;
+
+export type CommandPrefix = ReadonlyArray<string>;
 
 const createProject = Effect.fn("Acceptance.createProject")(function* (
   prefix: string,
@@ -69,7 +73,13 @@ const checkOutput = (
   runCommand: CommandRunner,
   projectRoot: string,
   ...paths: ReadonlyArray<string>
-) => Schema.decodeEffect(CheckOutput)(runCommand(projectRoot, ["check", ...paths]).stdout);
+) => {
+  const result = runCommand(projectRoot, ["check", ...paths]);
+
+  if (result.stdout === "") throw new Error(result.stderr);
+
+  return Schema.decodeEffect(CheckOutput)(result.stdout);
+};
 
 export const verifyStructuralIndex = Effect.fn("Acceptance.verifyStructuralIndex")(function* (
   runCommand: CommandRunner,
@@ -123,7 +133,8 @@ export const verifyStructuralIndex = Effect.fn("Acceptance.verifyStructuralIndex
             typeof(ordered_token_hashes) as ordered_type,
             length(ordered_token_hashes) as ordered_bytes,
             typeof(qgram_hashes) as qgram_type,
-            length(qgram_hashes) as qgram_bytes
+            length(qgram_hashes) as qgram_bytes,
+            embedding_hash
           from symbols
           order by file_path, symbol_key
         `)
@@ -148,6 +159,7 @@ export const verifyStructuralIndex = Effect.fn("Acceptance.verifyStructuralIndex
     work: {
       files: { indexed: 0, reused: 1, removed: 0 },
       symbols: { indexed: 0, reused: 1, removed: 0 },
+      vectors: { indexed: 0, reused: 0, removed: 0 },
     },
   });
 });
@@ -224,6 +236,484 @@ export const verifyStructuralCheck = Effect.fn("Acceptance.verifyStructuralCheck
   }
 });
 
+export const verifySemanticCheck = Effect.fn("Acceptance.verifySemanticCheck")(function* (
+  runCommand: CommandRunner,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const paths = yield* Path.Path;
+
+  const projectRoot = yield* createProject("antisprawl-semantic-check-", {
+    [structuralCheckScenario.configPath]: structuralCheckScenario.config,
+    ...structuralCheckScenario.baseline,
+  });
+
+  const environment = {
+    ANTISPRAW_ACCEPTANCE_EMBEDDINGS: "deterministic-v1",
+    XDG_CACHE_HOME: paths.join(projectRoot, ".cache"),
+  };
+
+  const indexed = runCommand(projectRoot, ["index"], environment);
+
+  expect({ exitCode: indexed.exitCode, stderr: indexed.stderr }).toEqual({
+    exitCode: 0,
+    stderr: "",
+  });
+  expect(yield* Schema.decodeEffect(Json)(indexed.stdout)).toMatchObject({
+    protocolVersion: 1,
+    command: "index",
+    analysis: { mode: "semantic", vectorSearch: "sqlite_vec" },
+    coverage: { status: "complete" },
+    work: { vectors: { indexed: 1, reused: 0, removed: 0 } },
+    provenance: {
+      profile: {
+        provider: "deterministic",
+        model: "acceptance-v1",
+        dimensions: 2,
+        language: "typescript",
+        embeddingRepresentation: 1,
+        detector: 2,
+        semanticThreshold: 0.85,
+        calibration: "calibrated",
+      },
+    },
+  });
+
+  const index = new Database(paths.join(projectRoot, ".antisprawl/index.sqlite"), {
+    readonly: true,
+  });
+
+  expect(
+    index
+      .query(
+        "select dimensions, typeof(vector) as vector_type, length(vector) as vector_bytes from vectors",
+      )
+      .all(),
+  ).toEqual([{ dimensions: 2, vector_type: "blob", vector_bytes: 8 }]);
+  index.close();
+
+  const indexText = new TextDecoder().decode(
+    yield* fs.readFile(paths.join(projectRoot, ".antisprawl/index.sqlite")),
+  );
+
+  for (const forbidden of ["cancelledAt", "ready.push", "typescript\\nexport"]) {
+    expect(indexText).not.toContain(forbidden);
+  }
+
+  yield* fs.writeFileString(
+    paths.join(projectRoot, "src/edit.ts"),
+    structuralCheckScenario.renamedCopy,
+  );
+
+  const checked = runCommand(projectRoot, ["check", "src/edit.ts"], environment);
+
+  expect({ exitCode: checked.exitCode, stderr: checked.stderr }).toEqual({
+    exitCode: 0,
+    stderr: "",
+  });
+  const checkedOutput = yield* Schema.decodeEffect(Json)(checked.stdout);
+  const checkedCore = yield* Schema.decodeEffect(CheckOutput)(checked.stdout);
+
+  expect(checkedOutput).toMatchObject({
+    protocolVersion: 1,
+    command: "check",
+    analysis: { mode: "semantic", vectorSearch: "sqlite_vec" },
+    coverage: { status: "complete" },
+    work: { vectors: { indexed: 1, reused: 1, removed: 0 } },
+    findings: [
+      {
+        type: "probable_duplicate",
+        edited: { path: "src/edit.ts", qualifiedName: "listEligibleJobs" },
+        candidate: { path: "src/jobs.ts", qualifiedName: "collectReadyJobs" },
+        semanticEvidence: { cosineSimilarity: 1 },
+      },
+    ],
+  });
+
+  for (const forbidden of ["cancelledAt", '"vector"', '"embeddingInput"']) {
+    expect(checked.stdout).not.toContain(forbidden);
+  }
+
+  for (const failure of ["digest", "extract", "load", "probe"] as const) {
+    const fallbackRoot = yield* createProject("antisprawl-semantic-fallback-", {
+      [structuralCheckScenario.configPath]: structuralCheckScenario.config,
+      ...structuralCheckScenario.baseline,
+    });
+
+    const fallbackEnvironment = {
+      ...environment,
+      XDG_CACHE_HOME: paths.join(fallbackRoot, ".cache"),
+    };
+
+    expect(runCommand(fallbackRoot, ["index"], fallbackEnvironment).exitCode, failure).toBe(0);
+    yield* fs.writeFileString(
+      paths.join(fallbackRoot, "src/edit.ts"),
+      structuralCheckScenario.renamedCopy,
+    );
+
+    const fallback = runCommand(fallbackRoot, ["check", "src/edit.ts"], {
+      ...fallbackEnvironment,
+      ANTISPRAW_ACCEPTANCE_VECTOR_SEARCH_FAILURE: failure,
+    });
+
+    const fallbackOutput = yield* Schema.decodeEffect(Json)(fallback.stdout);
+    const fallbackCore = yield* Schema.decodeEffect(CheckOutput)(fallback.stdout);
+
+    expect(fallback.exitCode, failure).toBe(0);
+    expect(fallback.stderr, failure).toBe("warning[vector_search_fallback]\n");
+    expect(fallbackOutput, failure).toMatchObject({
+      analysis: { mode: "semantic", vectorSearch: "application_exact" },
+      coverage: { status: "complete" },
+      diagnostics: [{ severity: "warning", code: "vector_search_fallback" }],
+      findings: [{ semanticEvidence: { cosineSimilarity: 1 } }],
+    });
+    expect(fallbackCore.findings[0]?.id, failure).toBe(checkedCore.findings[0]?.id);
+  }
+
+  for (const edit of structuralCheckScenario.edits.slice(1)) {
+    const isolatedRoot = yield* createProject("antisprawl-semantic-case-", {
+      [structuralCheckScenario.configPath]: structuralCheckScenario.config,
+      ...structuralCheckScenario.baseline,
+    });
+
+    const isolatedEnvironment = {
+      ...environment,
+      XDG_CACHE_HOME: paths.join(isolatedRoot, ".cache"),
+    };
+
+    expect(runCommand(isolatedRoot, ["index"], isolatedEnvironment).exitCode, edit.name).toBe(0);
+    yield* fs.writeFileString(paths.join(isolatedRoot, "src/edit.ts"), edit.source);
+
+    const result = runCommand(isolatedRoot, ["check", "src/edit.ts"], isolatedEnvironment);
+    const output = yield* Schema.decodeEffect(Json)(result.stdout);
+    const core = yield* Schema.decodeEffect(CheckOutput)(result.stdout);
+
+    expect({ exitCode: result.exitCode, stderr: result.stderr }, edit.name).toEqual({
+      exitCode: 0,
+      stderr: "",
+    });
+    expect(output, edit.name).toMatchObject({
+      analysis: { mode: "semantic", vectorSearch: "sqlite_vec" },
+      coverage: { status: "complete" },
+      findings:
+        edit.finding === undefined
+          ? []
+          : [
+              {
+                edited: { qualifiedName: edit.finding.edited },
+                candidate: { qualifiedName: "collectReadyJobs" },
+                semanticEvidence: { cosineSimilarity: 1 },
+              },
+            ],
+    });
+
+    const fallbackRoot = yield* createProject("antisprawl-semantic-case-fallback-", {
+      [structuralCheckScenario.configPath]: structuralCheckScenario.config,
+      ...structuralCheckScenario.baseline,
+    });
+
+    const fallbackEnvironment = {
+      ...environment,
+      XDG_CACHE_HOME: paths.join(fallbackRoot, ".cache"),
+    };
+
+    expect(runCommand(fallbackRoot, ["index"], fallbackEnvironment).exitCode, edit.name).toBe(0);
+    yield* fs.writeFileString(paths.join(fallbackRoot, "src/edit.ts"), edit.source);
+
+    const fallback = runCommand(fallbackRoot, ["check", "src/edit.ts"], {
+      ...fallbackEnvironment,
+      ANTISPRAW_ACCEPTANCE_VECTOR_SEARCH_FAILURE: "probe",
+    });
+
+    const fallbackOutput = yield* Schema.decodeEffect(Json)(fallback.stdout);
+    const fallbackCore = yield* Schema.decodeEffect(CheckOutput)(fallback.stdout);
+
+    expect({ exitCode: fallback.exitCode, stderr: fallback.stderr }, edit.name).toEqual({
+      exitCode: 0,
+      stderr: "warning[vector_search_fallback]\n",
+    });
+    expect(fallbackOutput, edit.name).toMatchObject({
+      analysis: { mode: "semantic", vectorSearch: "application_exact" },
+    });
+    expect(fallbackCore.coverage, edit.name).toEqual(core.coverage);
+    expect(fallbackCore.findings, edit.name).toEqual(core.findings);
+  }
+
+  const identityRoot = yield* createProject("antisprawl-semantic-identity-", {
+    [structuralCheckScenario.configPath]: structuralCheckScenario.config,
+    ...structuralCheckScenario.baseline,
+  });
+
+  const identityTrace = paths.join(identityRoot, "identity.trace");
+
+  const identityEnvironment = {
+    ANTISPRAW_ACCEPTANCE_EMBEDDINGS: "deterministic-v1",
+    XDG_CACHE_HOME: paths.join(identityRoot, ".cache"),
+  };
+
+  expect(runCommand(identityRoot, ["index"], identityEnvironment).exitCode).toBe(0);
+
+  const reconciled = runCommand(identityRoot, ["check"], {
+    ...identityEnvironment,
+    ANTISPRAW_ACCEPTANCE_EMBEDDING_MODEL: "acceptance-v2",
+    ANTISPRAW_ACCEPTANCE_EMBEDDING_TRACE: identityTrace,
+  });
+
+  const reconciledOutput = yield* Schema.decodeEffect(Json)(reconciled.stdout);
+
+  expect({ exitCode: reconciled.exitCode, stderr: reconciled.stderr }).toEqual({
+    exitCode: 0,
+    stderr: "",
+  });
+  expect((yield* fs.readFileString(identityTrace)).trim().split("\n")).toHaveLength(2);
+  expect(reconciledOutput).toMatchObject({
+    analysis: { mode: "semantic", vectorSearch: "sqlite_vec" },
+    coverage: { status: "complete" },
+    work: { vectors: { indexed: 1, reused: 0, removed: 1 } },
+    provenance: { profile: { model: "acceptance-v2" } },
+  });
+});
+
+export const verifyEmbeddingFailures = Effect.fn("Acceptance.verifyEmbeddingFailures")(function* (
+  runCommand: CommandRunner,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const paths = yield* Path.Path;
+
+  const failures = [
+    ["auth", "embedding_authentication_failed"],
+    ["transport", "embedding_transport_failed"],
+    ["wrong_count", "embedding_response_count_invalid"],
+    ["wrong_order", "embedding_response_order_invalid"],
+    ["wrong_index", "embedding_response_order_invalid"],
+    ["nonfinite", "embedding_vector_non_finite"],
+    ["dimensions", "embedding_vector_dimensions_invalid"],
+    ["zero", "embedding_vector_zero"],
+    ["timeout", "embedding_timeout"],
+  ] as const;
+
+  for (const [failure, code] of failures) {
+    const projectRoot = yield* createProject("antisprawl-embedding-failure-", {
+      [structuralCheckScenario.configPath]: structuralCheckScenario.config,
+      ...structuralCheckScenario.baseline,
+    });
+
+    const environment = {
+      ANTISPRAW_ACCEPTANCE_EMBEDDINGS: "deterministic-v1",
+      ANTISPRAW_ACCEPTANCE_EMBEDDING_FAILURE: failure,
+      ANTISPRAW_ACCEPTANCE_EMBEDDING_DEADLINE_MS: "10",
+      XDG_CACHE_HOME: paths.join(projectRoot, ".cache"),
+    };
+
+    const healthyEnvironment = {
+      ANTISPRAW_ACCEPTANCE_EMBEDDINGS: "deterministic-v1",
+      XDG_CACHE_HOME: paths.join(projectRoot, ".cache"),
+    };
+
+    expect(runCommand(projectRoot, ["index"], healthyEnvironment).exitCode, failure).toBe(0);
+    yield* fs.writeFileString(
+      paths.join(projectRoot, "src/edit.ts"),
+      structuralCheckScenario.sameFilePair,
+    );
+
+    const checked = runCommand(projectRoot, ["check", "src/edit.ts"], environment);
+    const output = yield* Schema.decodeEffect(Json)(checked.stdout);
+
+    expect(checked.exitCode, failure).toBe(0);
+    expect(checked.stderr, failure).toBe(`warning[${code}]\n`);
+    expect(output, failure).toMatchObject({
+      analysis: { mode: "structural_only" },
+      coverage: { status: "partial" },
+      diagnostics: [{ severity: "warning", code }],
+      findings: [{ type: "probable_duplicate" }],
+    });
+    expect(checked.stdout, failure).not.toContain("semanticEvidence");
+
+    const index = new Database(paths.join(projectRoot, ".antisprawl/index.sqlite"), {
+      readonly: true,
+    });
+
+    expect(index.query("select count(*) as count from vectors").get(), failure).toEqual({
+      count: 1,
+    });
+    index.close();
+  }
+});
+
+export const verifySemanticInterruption = Effect.fn("Acceptance.verifySemanticInterruption")(
+  function* (runCommand: CommandRunner, commandPrefix: CommandPrefix) {
+    const fs = yield* FileSystem.FileSystem;
+    const paths = yield* Path.Path;
+
+    const files = {
+      [structuralCheckScenario.configPath]: structuralCheckScenario.config,
+      ...structuralCheckScenario.baseline,
+      "src/math.ts": structuralCheckScenario.sameFilePair,
+    };
+
+    const projectRoot = yield* createProject("antisprawl-embedding-interrupt-", files);
+    const tracePath = paths.join(projectRoot, "batch.trace");
+
+    const environment = {
+      ...Bun.env,
+      ANTISPRAW_ACCEPTANCE_EMBEDDINGS: "deterministic-v1",
+      ANTISPRAW_ACCEPTANCE_EMBEDDING_TRACE: tracePath,
+      ANTISPRAW_ACCEPTANCE_PAUSE_AFTER_BATCH: "1",
+      XDG_CACHE_HOME: paths.join(projectRoot, ".cache"),
+    };
+
+    const child = Bun.spawn([...commandPrefix, "index"], {
+      cwd: projectRoot,
+      env: environment,
+      stderr: "pipe",
+      stdout: "pipe",
+    });
+
+    let committed = false;
+
+    for (let attempt = 0; attempt < 500; attempt += 1) {
+      if (yield* fs.exists(tracePath)) {
+        committed = true;
+        break;
+      }
+
+      yield* Effect.sleep(10);
+    }
+
+    expect(committed).toBe(true);
+    child.kill("SIGINT");
+
+    const exitCode = yield* Effect.promise(() => child.exited);
+    const stdout = yield* Effect.promise(() => new Response(child.stdout).text());
+
+    expect(exitCode).toBe(130);
+    expect(stdout).toBe("");
+
+    const indexPath = paths.join(projectRoot, ".antisprawl/index.sqlite");
+    const partial = new Database(indexPath, { readonly: true });
+
+    expect(partial.query("select complete from profile").get()).toEqual({ complete: 0 });
+    expect(partial.query("select count(*) as count from vectors").get()).toEqual({ count: 2 });
+    partial.close();
+
+    const resumed = runCommand(projectRoot, ["index"], {
+      ANTISPRAW_ACCEPTANCE_EMBEDDINGS: "deterministic-v1",
+      ANTISPRAW_ACCEPTANCE_EMBEDDING_TRACE: tracePath,
+      XDG_CACHE_HOME: paths.join(projectRoot, ".cache"),
+    });
+
+    const resumedOutput = yield* Schema.decodeEffect(Json)(resumed.stdout);
+
+    expect(resumed.exitCode).toBe(0);
+    expect((yield* fs.readFileString(tracePath)).trim().split("\n")).toHaveLength(2);
+    expect(resumedOutput).toMatchObject({
+      coverage: { status: "complete" },
+      work: { vectors: { indexed: 1, reused: 2, removed: 0 } },
+    });
+
+    const cleanRoot = yield* createProject("antisprawl-embedding-clean-", files);
+
+    const clean = runCommand(cleanRoot, ["index"], {
+      ANTISPRAW_ACCEPTANCE_EMBEDDINGS: "deterministic-v1",
+      XDG_CACHE_HOME: paths.join(cleanRoot, ".cache"),
+    });
+
+    expect(clean.exitCode).toBe(0);
+
+    const completed = new Database(indexPath, { readonly: true });
+
+    const cleanIndex = new Database(paths.join(cleanRoot, ".antisprawl/index.sqlite"), {
+      readonly: true,
+    });
+
+    const stateQuery = `
+    select embedding_identity, input_hash, dimensions, hex(vector) as vector
+    from vectors order by embedding_identity, input_hash
+  `;
+
+    const profileQuery = `
+    select provider, model, dimensions, language, embedding_representation,
+      detector_version, semantic_threshold, calibration_state, complete,
+      usage_requests, usage_inputs, usage_input_tokens, usage_duration_ms
+    from profile
+  `;
+
+    expect(completed.query(stateQuery).all()).toEqual(cleanIndex.query(stateQuery).all());
+    expect(completed.query(profileQuery).all()).toEqual(cleanIndex.query(profileQuery).all());
+    completed.close();
+    cleanIndex.close();
+  },
+);
+
+export const verifyExplicitIndexFailure = Effect.fn("Acceptance.verifyExplicitIndexFailure")(
+  function* (runCommand: CommandRunner) {
+    const fs = yield* FileSystem.FileSystem;
+    const paths = yield* Path.Path;
+
+    const projectRoot = yield* createProject("antisprawl-embedding-index-failure-", {
+      [structuralCheckScenario.configPath]: structuralCheckScenario.config,
+      ...structuralCheckScenario.baseline,
+      "src/math.ts": structuralCheckScenario.sameFilePair,
+    });
+
+    const result = runCommand(projectRoot, ["index"], {
+      ANTISPRAW_ACCEPTANCE_EMBEDDINGS: "deterministic-v1",
+      ANTISPRAW_ACCEPTANCE_EMBEDDING_FAILURE: "transport",
+      ANTISPRAW_ACCEPTANCE_EMBEDDING_FAILURE_BATCH: "2",
+      XDG_CACHE_HOME: paths.join(projectRoot, ".cache"),
+    });
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("error[embedding_transport_failed]");
+
+    const index = new Database(paths.join(projectRoot, ".antisprawl/index.sqlite"), {
+      readonly: true,
+    });
+
+    expect(index.query("select complete from profile").get()).toEqual({ complete: 0 });
+    expect(index.query("select count(*) as count from vectors").get()).toEqual({ count: 2 });
+    index.close();
+
+    const tracePath = paths.join(projectRoot, "named-check.trace");
+
+    yield* fs.writeFileString(
+      paths.join(projectRoot, "src/edit.ts"),
+      structuralCheckScenario.renamedCopy,
+    );
+
+    const checked = runCommand(projectRoot, ["check", "src/edit.ts"], {
+      ANTISPRAW_ACCEPTANCE_EMBEDDINGS: "deterministic-v1",
+      ANTISPRAW_ACCEPTANCE_EMBEDDING_TRACE: tracePath,
+      XDG_CACHE_HOME: paths.join(projectRoot, ".cache"),
+    });
+
+    const output = yield* Schema.decodeEffect(Json)(checked.stdout);
+
+    expect(checked.exitCode).toBe(0);
+    expect(checked.stderr).toBe("warning[semantic_index_partial]\n");
+    expect(yield* fs.exists(tracePath)).toBe(false);
+    expect(output).toMatchObject({
+      analysis: { mode: "structural_only" },
+      coverage: { status: "partial" },
+      findings: [{ type: "probable_duplicate" }],
+    });
+
+    const reconciled = runCommand(projectRoot, ["check"], {
+      ANTISPRAW_ACCEPTANCE_EMBEDDINGS: "deterministic-v1",
+      ANTISPRAW_ACCEPTANCE_EMBEDDING_TRACE: tracePath,
+      XDG_CACHE_HOME: paths.join(projectRoot, ".cache"),
+    });
+
+    expect(reconciled.exitCode).toBe(0);
+    expect(yield* fs.exists(tracePath)).toBe(true);
+    expect((yield* fs.readFileString(tracePath)).trim().split("\n")).toHaveLength(3);
+    expect(yield* Schema.decodeEffect(Json)(reconciled.stdout)).toMatchObject({
+      analysis: { mode: "semantic", vectorSearch: "sqlite_vec" },
+      coverage: { status: "complete" },
+    });
+  },
+);
+
 export const verifyStructuralCheckLifecycle = Effect.fn(
   "Acceptance.verifyStructuralCheckLifecycle",
 )(function* (runCommand: CommandRunner) {
@@ -287,6 +777,7 @@ export const verifyStructuralCheckLifecycle = Effect.fn(
   expect(unchanged.work).toEqual({
     files: { indexed: 0, reused: 2, removed: 0 },
     symbols: { indexed: 0, reused: 2, removed: 0 },
+    vectors: { indexed: 0, reused: 0, removed: 0 },
   });
 
   yield* fs.writeFileString(
@@ -493,7 +984,7 @@ export const verifyStructuralCheckLifecycle = Effect.fn(
 
   const replacementDatabase = new Database(incompatiblePath, { readonly: true });
 
-  expect(replacementDatabase.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+  expect(replacementDatabase.query("PRAGMA user_version").get()).toEqual({ user_version: 3 });
   replacementDatabase.close();
 
   const corruptRoot = yield* freshProject;

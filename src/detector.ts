@@ -1,6 +1,7 @@
+import { applicationCosine } from "./embedding.ts";
 import type { StructuralRepresentation } from "./representation.ts";
 
-export const detectorVersion = 1;
+export const detectorVersion = 2;
 
 export const structuralPolicy = {
   version: 1,
@@ -36,7 +37,16 @@ export interface Finding {
     readonly qgramSimilarity: number;
     readonly orderedTokenSimilarity: number;
   };
+  readonly semanticEvidence?: {
+    readonly cosineSimilarity: number;
+  };
   readonly guidance: string;
+}
+
+export interface SemanticAnalysis {
+  readonly threshold: number;
+  readonly vectors: ReadonlyMap<string, Float32Array>;
+  readonly candidateHashesByQuery?: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 export interface DetectorResult {
@@ -127,6 +137,7 @@ const roundEvidence = (value: number) => Math.round(value * 1_000_000) / 1_000_0
 export const detectProbableDuplicates = (
   edited: ReadonlyArray<IndexedSymbol>,
   current: ReadonlyArray<IndexedSymbol>,
+  semantic?: SemanticAnalysis,
 ): DetectorResult => {
   const eligible = current.filter((symbol) => symbol.tokenCount >= structuralPolicy.minimumTokens);
   const counts = new Map<string, number>();
@@ -149,6 +160,7 @@ export const detectProbableDuplicates = (
 
   const findings: Array<{
     readonly finding: Finding;
+    readonly cosineSimilarity?: number;
     readonly qgramSimilarity: number;
     readonly orderedTokenSimilarity: number;
   }> = [];
@@ -174,6 +186,13 @@ export const detectProbableDuplicates = (
       if (
         identity(changed) === identity(candidate) ||
         (candidateIsEdited && compareIdentity(changed, candidate) > 0)
+      ) {
+        continue;
+      }
+
+      if (
+        semantic?.candidateHashesByQuery !== undefined &&
+        !semantic.candidateHashesByQuery.get(changed.embeddingHash)?.has(candidate.embeddingHash)
       ) {
         continue;
       }
@@ -211,24 +230,46 @@ export const detectProbableDuplicates = (
         if (tokenOrderSimilarity < structuralPolicy.orderedTokenSimilarity) continue;
       }
 
+      let cosineSimilarity: number | undefined;
+
+      if (semantic !== undefined) {
+        const changedVector = semantic.vectors.get(changed.embeddingHash);
+        const candidateVector = semantic.vectors.get(candidate.embeddingHash);
+
+        if (changedVector === undefined || candidateVector === undefined) continue;
+
+        cosineSimilarity = applicationCosine(changedVector, candidateVector);
+
+        if (cosineSimilarity < semantic.threshold) continue;
+      }
+
+      const finding: Finding = {
+        id,
+        type: "probable_duplicate",
+        language: "typescript",
+        edited: location(changed),
+        candidate: location(candidate),
+        structuralEvidence: {
+          strictHashEqual: changed.strictHash === candidate.strictHash,
+          normalizedHashEqual,
+          qgramSimilarity: roundEvidence(qgramSimilarity),
+          orderedTokenSimilarity: roundEvidence(tokenOrderSimilarity),
+        },
+        guidance:
+          "Inspect whether the Edited symbol can reuse the Candidate symbol before keeping both.",
+      };
+
+      if (cosineSimilarity !== undefined) {
+        Object.assign(finding, {
+          semanticEvidence: { cosineSimilarity: roundEvidence(cosineSimilarity) },
+        });
+      }
+
       findings.push({
+        cosineSimilarity,
         qgramSimilarity,
         orderedTokenSimilarity: tokenOrderSimilarity,
-        finding: {
-          id,
-          type: "probable_duplicate",
-          language: "typescript",
-          edited: location(changed),
-          candidate: location(candidate),
-          structuralEvidence: {
-            strictHashEqual: changed.strictHash === candidate.strictHash,
-            normalizedHashEqual,
-            qgramSimilarity: roundEvidence(qgramSimilarity),
-            orderedTokenSimilarity: roundEvidence(tokenOrderSimilarity),
-          },
-          guidance:
-            "Inspect whether the Edited symbol can reuse the Candidate symbol before keeping both.",
-        },
+        finding,
       });
     }
   }
@@ -237,6 +278,7 @@ export const detectProbableDuplicates = (
     findings: findings
       .sort(
         (left, right) =>
+          (right.cosineSimilarity ?? 0) - (left.cosineSimilarity ?? 0) ||
           Number(right.finding.structuralEvidence.strictHashEqual) -
             Number(left.finding.structuralEvidence.strictHashEqual) ||
           Number(right.finding.structuralEvidence.normalizedHashEqual) -

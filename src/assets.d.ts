@@ -12,3 +12,8 @@ declare module "*.jsonc" {
   const path: string;
   export default path;
 }
+
+declare module "*.so" {
+  const path: string;
+  export default path;
+}

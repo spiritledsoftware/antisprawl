@@ -4,6 +4,10 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import {
+  verifyEmbeddingFailures,
+  verifyExplicitIndexFailure,
+  verifySemanticCheck,
+  verifySemanticInterruption,
   verifyStructuralCheck,
   verifyStructuralCheckLifecycle,
   verifyStructuralIndex,
@@ -49,10 +53,10 @@ compiledTest(
             stderr: "",
           });
 
-          const runCommand: CommandRunner = (projectRoot, arguments_) => {
+          const runCommand: CommandRunner = (projectRoot, arguments_, environment = {}) => {
             const process = Bun.spawnSync([executable, ...arguments_], {
               cwd: projectRoot,
-              env: { ...Bun.env, NO_COLOR: "1" },
+              env: { ...Bun.env, NO_COLOR: "1", ...environment },
               stderr: "pipe",
               stdout: "pipe",
             });
@@ -66,6 +70,10 @@ compiledTest(
 
           yield* verifyStructuralIndex(runCommand);
           yield* verifyStructuralCheck(runCommand);
+          yield* verifySemanticCheck(runCommand);
+          yield* verifyEmbeddingFailures(runCommand);
+          yield* verifySemanticInterruption(runCommand, [executable]);
+          yield* verifyExplicitIndexFailure(runCommand);
           yield* verifyStructuralCheckLifecycle(runCommand);
         }),
       ).pipe(Effect.provide(BunServices.layer)),

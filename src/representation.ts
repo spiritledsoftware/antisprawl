@@ -2,6 +2,8 @@ import type { CanonicalToken, ExtractedSymbol } from "./language.ts";
 
 export const representationVersion = 1;
 
+export const embeddingRepresentationVersion = 1;
+
 export interface StructuralRepresentation {
   readonly key: string;
   readonly qualifiedName: string;
@@ -17,6 +19,8 @@ export interface StructuralRepresentation {
   readonly normalizedHash: string;
   readonly orderedTokenHashes: Uint8Array;
   readonly qgramHashes: Uint8Array;
+  readonly embeddingHash: string;
+  readonly embeddingInput?: string;
 }
 
 const sha256 = (value: Uint8Array) => Bun.CryptoHasher.hash("sha256", value, "hex");
@@ -43,6 +47,7 @@ export const representSymbol = (symbol: ExtractedSymbol): StructuralRepresentati
 
   const strictBytes = pack(strictTokens);
   const normalizedBytes = pack(normalizedTokens);
+  const embeddingInput = `typescript\n${symbol.tokens.map((token) => token.text).join(" ")}`;
 
   return {
     key: symbol.key,
@@ -59,5 +64,7 @@ export const representSymbol = (symbol: ExtractedSymbol): StructuralRepresentati
     normalizedHash: sha256(normalizedBytes),
     orderedTokenHashes: normalizedBytes,
     qgramHashes: pack([...qgrams].sort()),
+    embeddingHash: Bun.CryptoHasher.hash("sha256", embeddingInput, "hex"),
+    embeddingInput,
   };
 };
