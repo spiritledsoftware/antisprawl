@@ -21,6 +21,7 @@ const symbol = (path: string, qualifiedName: string, strictHash: string): Indexe
   normalizedHash: "same-normalized",
   orderedTokenHashes: pack(1, 2, 3),
   qgramHashes: pack(4),
+  embeddingHash: "03".repeat(32),
 });
 
 const withFingerprints = (
@@ -139,6 +140,87 @@ test("Findings rank strict, normalized, then near matches without a result limit
     "normalized",
     "near",
   ]);
+});
+
+test("Semantic analysis requires the cosine gate and publishes its evidence", () => {
+  const edited = { ...symbol("src/edit.ts", "edited", "edited"), embeddingHash: "11".repeat(32) };
+
+  const passing = {
+    ...symbol("src/pass.ts", "passing", "passing"),
+    embeddingHash: "22".repeat(32),
+  };
+
+  const rejected = {
+    ...symbol("src/reject.ts", "rejected", "rejected"),
+    embeddingHash: "33".repeat(32),
+  };
+
+  const result = detectProbableDuplicates([edited], [edited, passing, rejected], {
+    threshold: 0.85,
+    vectors: new Map([
+      [edited.embeddingHash, new Float32Array([1, 0])],
+      [passing.embeddingHash, new Float32Array([0.9, 0.4358899])],
+      [rejected.embeddingHash, new Float32Array([0, 1])],
+    ]),
+  });
+
+  expect(result.findings).toHaveLength(1);
+  expect(result.findings[0]).toMatchObject({
+    candidate: { qualifiedName: "passing" },
+    semanticEvidence: { cosineSimilarity: 0.9 },
+  });
+});
+
+test("Semantic thresholds use full precision before public rounding and include the boundary", () => {
+  const edited = { ...symbol("src/edit.ts", "edited", "edited"), embeddingHash: "41".repeat(32) };
+
+  const boundary = {
+    ...symbol("src/boundary.ts", "boundary", "boundary"),
+    embeddingHash: "42".repeat(32),
+  };
+
+  const roundedOnly = {
+    ...symbol("src/rounded.ts", "rounded", "rounded"),
+    embeddingHash: "43".repeat(32),
+  };
+
+  const unit = (cosine: number) => new Float32Array([cosine, Math.sqrt(1 - cosine * cosine)]);
+
+  const result = detectProbableDuplicates([edited], [edited, boundary, roundedOnly], {
+    threshold: 0.85,
+    vectors: new Map([
+      [edited.embeddingHash, new Float32Array([1, 0])],
+      [boundary.embeddingHash, unit(0.85)],
+      [roundedOnly.embeddingHash, unit(0.8499999)],
+    ]),
+  });
+
+  expect(result.findings).toHaveLength(1);
+  expect(result.findings[0]).toMatchObject({
+    candidate: { qualifiedName: "boundary" },
+    semanticEvidence: { cosineSimilarity: 0.85 },
+  });
+});
+
+test("Semantic candidate retrieval limits application rescoring", () => {
+  const edited = { ...symbol("src/edit.ts", "edited", "edited"), embeddingHash: "51".repeat(32) };
+
+  const candidate = {
+    ...symbol("src/candidate.ts", "candidate", "candidate"),
+    embeddingHash: "52".repeat(32),
+  };
+
+  const result = detectProbableDuplicates([edited], [edited, candidate], {
+    threshold: 0.85,
+    vectors: new Map([
+      [edited.embeddingHash, new Float32Array([1, 0])],
+      [candidate.embeddingHash, new Float32Array([1, 0])],
+    ]),
+    candidateHashesByQuery: new Map([[edited.embeddingHash, new Set([edited.embeddingHash])]]),
+  });
+
+  expect(result.comparisons).toBe(0);
+  expect(result.findings).toEqual([]);
 });
 
 test("Meaningful-size and ambiguous Symbols are excluded", () => {

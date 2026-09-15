@@ -58,8 +58,16 @@ _Avoid_: Semantic equivalence
 Embedding similarity interpreted under a specific Profile.
 _Avoid_: Proof, meaning
 
+**Embedding input**:
+The versioned, comment-free Symbol text sent to an embedding provider and never stored in the Index.
+_Avoid_: Source body, prompt
+
+**Embedding identity**:
+The provider, model, dimensions, language, and representation version that determine whether a stored vector can be reused.
+_Avoid_: Profile, cache key
+
 **Profile**:
-The provider, model, dimensions, language, detector version, and thresholds used to interpret Semantic evidence.
+An Embedding identity plus the detector version and thresholds used to interpret Semantic evidence.
 _Avoid_: Model, provider configuration
 
 **Calibration state**:
@@ -69,6 +77,10 @@ _Avoid_: Confidence score
 **Structural-only mode**:
 Detection that relies on Structural evidence without an embedding provider.
 _Avoid_: Offline mode, local mode
+
+**Analysis mode**:
+The evidence path actually used for a check: Structural-only or semantic under a Profile.
+_Avoid_: Configured provider, search backend
 
 ## Findings and project state
 
@@ -89,7 +101,7 @@ A disposable project-local record of source state and derived Symbol representat
 _Avoid_: Source of truth, repository
 
 **Coverage**:
-Whether every Eligible source file is current in the Index. Coverage may be `complete`, `partial`, `stale`, or `degraded`.
+Whether every Eligible source file and, under an active Profile, its required vectors are current in the Index. Coverage may be `complete`, `partial`, `stale`, or `degraded`.
 _Avoid_: Accuracy, confidence
 
 **Reconciliation**:

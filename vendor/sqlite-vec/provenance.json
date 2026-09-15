@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/asg017/sqlite-vec",
+  "version": "v0.1.9",
+  "commit": "e9f598abfa0c06b328d8fe5da9c3760cce74be10",
+  "artifact": "sqlite-vec-0.1.9-loadable-linux-x86_64.tar.gz",
+  "artifactUrl": "https://github.com/asg017/sqlite-vec/releases/download/v0.1.9/sqlite-vec-0.1.9-loadable-linux-x86_64.tar.gz",
+  "artifactSha256": "b959baa1d8dc88861b1edb337b8587178cdcb12d60b4998f9d10b6a82052d5d7",
+  "target": "linux-x86_64",
+  "library": "linux-x64/vec0.so",
+  "librarySha256": "5923730861b86c707cca5602b5f91092f9e52a46706dbc6e269fd4bb9c4498e8",
+  "entrypoint": "sqlite3_vec_init"
+}

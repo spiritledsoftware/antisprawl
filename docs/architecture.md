@@ -1,6 +1,6 @@
 # Antisprawl Architecture
 
-> **Status:** Accepted design; issues #15 and #16 are implemented
+> **Status:** Accepted design; issues #15 through #17 are implemented
 >
 > **Target release:** `0.1.0`
 >
@@ -39,7 +39,7 @@ Cross-language discovery is an opt-in experiment within one project, not part of
 
 ### Current implementation boundary
 
-Issues #15 and #16 implement the public `index` and deterministic Structural-only `check` commands: Project discovery, embedded verified TypeScript parsing, source-free Structural representations, the SQLite Index, and Findings for Symbols changed in the current Edit batch. Findings are never persisted. Embeddings, grammar downloads, watchers, harness adapters, other languages, and release packaging remain later work. Sections describing those capabilities are target architecture, not claims about the current executable.
+Issues #15 through #17 implement the public `index` and `check` commands: Project discovery, embedded verified TypeScript parsing, source-free Structural representations, the SQLite Index, Findings for Symbols changed in the current Edit batch, resumable deterministic embedding batches, and exact semantic search with a native sqlite-vec path and application fallback. The deterministic embedding provider remains private to acceptance tests; public provider configuration is still rejected. Findings are never persisted. Real providers, grammar downloads, watchers, harness adapters, other languages, and release packaging remain later work. Sections describing those capabilities are target architecture, not claims about the current executable.
 
 ## 2. Terms
 
@@ -49,8 +49,9 @@ Issues #15 and #16 implement the public `index` and deterministic Structural-onl
 | **Symbol**                 | A named function, method, or named closure/arrow function extracted from a supported grammar.                                     |
 | **Probable duplicate**     | A same-language, meaningful-size symbol pair whose semantic and structural evidence passes configured gates.                      |
 | **Related implementation** | An opt-in, lower-confidence cross-language match that may reveal duplicated responsibility but cannot usually be reused directly. |
-| **Profile**                | The provider, model, dimensions, language, detector version, and thresholds used to interpret embedding similarity.               |
-| **Coverage**               | Whether every eligible source file is current in the index. Coverage may be complete, partial, stale, or degraded.                |
+| **Embedding identity**     | The provider, model, dimensions, language, and representation version that determine whether a stored vector can be reused.       |
+| **Profile**                | An Embedding identity plus the detector version and thresholds used to interpret embedding similarity.                            |
+| **Coverage**               | Whether every eligible source file and, under an active Profile, its required vectors are current in the Index.                   |
 
 ## 3. System context
 
@@ -193,7 +194,7 @@ Owns explicit provider batch limits, input estimation, retries, deadlines, cance
 
 ### Index module
 
-Owns SQLite schema, transactions, provenance, file and symbol replacement, vector persistence, queries, partial progress, and atomic rebuilds. It uses the Effect Bun SQLite adapter internally without exposing its generic SQL interface to callers. Storage access remains localized, but v1 does not publish a storage plug-in interface while only one implementation exists.
+Owns SQLite schema, transactions, provenance, file and symbol replacement, vector persistence, exact candidate queries, partial progress, and atomic rebuilds. It uses the Effect Bun SQLite adapter for ordinary persistence and Effect Schema at persisted-data boundaries. A private read-only `bun:sqlite` connection is isolated to verified sqlite-vec loading, probing, and candidate queries; fallback remains behind the same Index boundary. Storage access remains localized, but v1 does not publish a storage plug-in interface while only one implementation exists.
 
 ### Detection module
 
@@ -327,13 +328,13 @@ It does not store Findings, Finding evidence, Finding outcomes, or delivery hist
 
 It stores no source, prompts, commands, transcripts, or credentials.
 
-`@effect/sql-sqlite-bun` is the Index module's internal Effect adapter over the underlying `bun:sqlite` persistence implementation. Its `loadExtension` support loads target-specific SQLite-Vector libraries after each library is embedded in the release executable, checksum-verified, and extracted once into a private versioned cache. The adapter's generic `SqlClient` does not cross the Index module's interface; a custom direct wrapper is justified only if acceptance tests reveal a required transaction or SQLite-Vector operation the adapter cannot express. Initial search uses deterministic `vector_full_scan`. A pure-Bun exact cosine scan over ordinary vector BLOBs is the guaranteed fallback when extension extraction or loading is unsupported.
+The Index uses one canonical ordinary float32 vector BLOB representation for both search paths. On Linux x64, the executable embeds pinned `asg017/sqlite-vec` v0.1.9, verifies it, atomically extracts it to a private versioned cache, loads it on the query connection, and probes its version and cosine function. sqlite-vec orders candidates by exact cosine over the ordinary BLOB table; application full-precision cosine rescoring remains authoritative for gates, public evidence, and ranking. Digest, extraction, load, or probe failure emits one bounded diagnostic and uses application exact search over the same BLOBs without reindexing or changing Coverage.
 
 Quantized search requires recall benchmarks before enablement. ANN indexes are a v1 non-goal. LanceDB, USearch, and alternate storage engines are deferred until measured scale requires them.
 
-An interrupted full index commits completed provider batches and resumes by content hash. Coverage remains partial until reconciliation completes; partial results may still yield advisories, while `status` reports incomplete coverage.
+An interrupted full index commits completed provider batches and aggregate usage, exits `130`, and resumes only missing Embedding-input hashes. Coverage remains partial until Reconciliation completes. Named `check` never backfills unrelated missing vectors and uses Structural-only analysis while its semantic baseline is partial; no-path `check` may reconcile the whole Project.
 
-A configuration or schema incompatibility never triggers a surprise rebuild from a hook. The index becomes stale, and one diagnostic per session asks for an explicit `antisprawl index`. Rebuilding writes a replacement database and atomically swaps it into place only after completion.
+A configuration or schema incompatibility never triggers a surprise rebuild from a hook. The Index becomes stale, and one diagnostic per session asks for an explicit `antisprawl index`. Structural replacement remains atomic. Semantic indexing then makes only complete provider batches durable so interruption leaves a readable, resumable partial Index.
 
 ## 11. Incremental operation and concurrency
 
@@ -442,7 +443,7 @@ Grammar assets may be installed lazily, but pinned project assets do not update 
 
 All source and integration tests run through `bun test`. This keeps one runner for the Bun CLI, SQLite, parser, compiled executable, and pure representation checks; a second runner can be added only when a concrete non-Bun test boundary requires it.
 
-There is no numeric public precision claim. Precision, recall, warning frequency, latency, failures, and provider usage are regression signals.
+Structural and cosine evidence is published to six decimal places, while full precision determines gates and ordering. Precision, recall, warning frequency, latency, failures, and provider usage are regression signals.
 
 ### Detector evaluation
 
@@ -468,7 +469,7 @@ Use paired long-running agent tasks that preserve the agent's own workspace acro
 - Exact Effect-family version alignment and composed Layer startup/shutdown.
 - Effect interruption, timeout, retry, scoped-resource, and tagged-error behavior.
 - Embedded `web-tree-sitter` runtime and lazy grammar WASM loading.
-- `@effect/sql-sqlite-bun` transactions, SQLite-Vector extraction/loading, and pure-Bun fallback.
+- SQLite transactions, verified sqlite-vec extraction/loading/probing, and application exact fallback over the same vector BLOBs.
 - Effect AI OpenAI/compatible batching, dimensions, response validation, and usage reporting.
 - Pi, Claude, and Codex lifecycle, watcher, flush, and advisory delivery.
 - Interrupted indexing, concurrent hooks, stale leases, and atomic rebuilds.
@@ -482,8 +483,8 @@ Build only enough to validate the core signal:
 
 - Bun CLI built with `effect/unstable/cli` and `BunRuntime.runMain`;
 - TypeScript symbol extraction;
-- experimental Codex OAuth as an Effect `EmbeddingModel` adapter with `text-embedding-3-small`;
-- `@effect/sql-sqlite-bun` persistence and exact vector scan;
+- a private deterministic embedding adapter that validates batching, persistence, interruption, and failures before a real provider is introduced;
+- ordinary SQLite vector-BLOB persistence, pinned sqlite-vec exact retrieval, and application exact rescoring;
 - manual `index` and `check`;
 - authored clone and hard-negative fixtures;
 - dogfooding against Antisprawl's own TypeScript source.
@@ -496,7 +497,7 @@ Add:
 
 - five verified languages;
 - OpenAI API-key and generic OpenAI-compatible providers;
-- SQLite-Vector with exact fallback;
+- pinned sqlite-vec with application exact fallback;
 - project watcher and reconciliation;
 - Pi, Codex, and Claude integrations;
 - Agent Plugin and both skills;
@@ -513,7 +514,7 @@ The architecture deliberately does not fix values that must come from evidence:
 - embedding candidate count;
 - 384 versus 1536 dimensions;
 - watcher debounce and reconciliation intervals;
-- SQLite-Vector target support;
+- sqlite-vec target support;
 - whether quantized search preserves adequate recall.
 
 These values are versioned once selected and remain visible in configuration or index provenance.
@@ -531,4 +532,4 @@ These values are versioned once selected and remain visible in configuration or 
 - [Effect repository](https://github.com/Effect-TS/effect)
 - [Bun standalone executables](https://bun.sh/docs/bundler/executables)
 - [Bun SQLite](https://bun.sh/docs/runtime/sqlite)
-- [SQLite-Vector](https://github.com/sqliteai/sqlite-vector)
+- [sqlite-vec](https://github.com/asg017/sqlite-vec)
