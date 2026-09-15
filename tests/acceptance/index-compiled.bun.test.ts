@@ -1,0 +1,62 @@
+import * as BunServices from "@effect/platform-bun/BunServices";
+import { expect, test } from "bun:test";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import { verifyStructuralIndex } from "./structural-index.harness.ts";
+
+const repositoryRoot = Bun.fileURLToPath(new URL("../..", import.meta.url));
+
+const sourceEntrypoint = Bun.fileURLToPath(new URL("../../src/main.ts", import.meta.url));
+
+const compiledTest = process.platform === "linux" && process.arch === "x64" ? test : test.skip;
+
+compiledTest("Linux x64 executable builds and reuses the real TypeScript Structural Index", () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const paths = yield* Path.Path;
+        const buildRoot = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-compiled-" });
+        const executable = paths.join(buildRoot, "antisprawl");
+
+        const build = Bun.spawnSync(
+          [
+            "bun",
+            "build",
+            "--compile",
+            "--target=bun-linux-x64",
+            sourceEntrypoint,
+            "--outfile",
+            executable,
+          ],
+          {
+            cwd: repositoryRoot,
+            stderr: "pipe",
+            stdout: "pipe",
+          },
+        );
+
+        expect({ exitCode: build.exitCode, stderr: build.stderr.toString() }).toEqual({
+          exitCode: 0,
+          stderr: "",
+        });
+
+        yield* verifyStructuralIndex((projectRoot) => {
+          const process = Bun.spawnSync([executable, "index"], {
+            cwd: projectRoot,
+            env: { ...Bun.env, NO_COLOR: "1" },
+            stderr: "pipe",
+            stdout: "pipe",
+          });
+
+          return {
+            exitCode: process.exitCode,
+            stderr: process.stderr.toString(),
+            stdout: process.stdout.toString(),
+          };
+        });
+      }),
+    ).pipe(Effect.provide(BunServices.layer)),
+  ),
+);

@@ -4,28 +4,39 @@
   "description": "Keep your agent from writing spaghetti code.",
   "type": "module",
   "scripts": {
+    "build": "bun build --compile src/main.ts --outfile dist/antisprawl",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "lint:staged": "lint-staged",
-    "prepare": "husky",
-    "test": "vitest run",
+    "prepare": "husky && effect-tsgo patch --typescript --oxlint",
+    "test": "bun test",
     "typecheck": "tsc --noEmit",
     "verify": "bun run format:check && bun run lint && bun run typecheck && bun run test"
   },
   "dependencies": {
-    "effect": "^4.0.0-beta.107"
+    "@effect/platform-bun": "4.0.0-rc.115",
+    "@effect/sql-sqlite-bun": "4.0.0-rc.115",
+    "effect": "^4.0.0-rc.115",
+    "web-tree-sitter": "0.27.0"
   },
   "devDependencies": {
+    "@effect/tsgo": "0.45.0",
     "@oxlint/plugins": "1.83.0",
-    "@types/bun": "^1.4.2",
+    "@types/bun": "1.4.2",
     "husky": "^9.1.7",
     "lint-staged": "^17.5.1",
     "oxfmt": "^0.68.0",
-    "oxlint": "^1.83.0",
-    "oxlint-tsgolint": "^7.0.2001",
-    "typescript": "^7.0.2",
-    "vitest": "^5.0.0"
+    "oxlint": "1.82.0",
+    "oxlint-tsgolint": "7.0.2001",
+    "typescript": "^7.0.2"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "bun",
+      "version": "1.4.2",
+      "onFail": "error"
+    }
   }
 }
