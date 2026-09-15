@@ -4,13 +4,13 @@
   "description": "Keep your agent from writing spaghetti code.",
   "type": "module",
   "scripts": {
+    "build": "bun build --compile src/main.ts --outfile dist/antisprawl",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "lint:staged": "lint-staged",
     "prepare": "husky",
-    "build": "bun build --compile src/main.ts --outfile dist/antisprawl",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "verify": "bun run format:check && bun run lint && bun run typecheck && bun run test"
