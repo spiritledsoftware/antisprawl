@@ -16,6 +16,7 @@ import {
   encodeVector,
   runEmbeddingBatch,
   type EmbeddingProvider,
+  type EmbeddingRequest,
   type EmbeddingUsage,
   type Profile,
 } from "./embedding.ts";
@@ -408,18 +409,20 @@ const embedRequired = Effect.fn("App.embedRequired")(function* (
   for (let offset = 0; offset < missing.length; offset += embeddingBatchSize) {
     const hashes = missing.slice(offset, offset + embeddingBatchSize);
 
-    const requests = hashes.map((hash, index) => {
+    const requests: Array<EmbeddingRequest> = [];
+
+    for (const [index, hash] of hashes.entries()) {
       const input = inputByHash.get(hash);
 
       if (input === undefined) {
-        throw appError(
+        return yield* appError(
           "embedding_input_unavailable",
           "Embedding input is unavailable. Run antisprawl index.",
         );
       }
 
-      return { index, hash, input };
-    });
+      requests.push({ index, hash, input });
+    }
 
     const batch = yield* runEmbeddingBatch(provider, requests);
 
