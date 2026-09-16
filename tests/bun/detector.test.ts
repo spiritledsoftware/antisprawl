@@ -164,6 +164,7 @@ test("Semantic analysis requires the cosine gate and publishes its evidence", ()
     ]),
   });
 
+  expect(result.rescored).toBe(2);
   expect(result.findings).toHaveLength(1);
   expect(result.findings[0]).toMatchObject({
     candidate: { qualifiedName: "passing" },
@@ -195,32 +196,12 @@ test("Semantic thresholds use full precision before public rounding and include 
     ]),
   });
 
+  expect(result.rescored).toBe(2);
   expect(result.findings).toHaveLength(1);
   expect(result.findings[0]).toMatchObject({
     candidate: { qualifiedName: "boundary" },
     semanticEvidence: { cosineSimilarity: 0.85 },
   });
-});
-
-test("Semantic candidate retrieval limits application rescoring", () => {
-  const edited = { ...symbol("src/edit.ts", "edited", "edited"), embeddingHash: "51".repeat(32) };
-
-  const candidate = {
-    ...symbol("src/candidate.ts", "candidate", "candidate"),
-    embeddingHash: "52".repeat(32),
-  };
-
-  const result = detectProbableDuplicates([edited], [edited, candidate], {
-    threshold: 0.85,
-    vectors: new Map([
-      [edited.embeddingHash, new Float32Array([1, 0])],
-      [candidate.embeddingHash, new Float32Array([1, 0])],
-    ]),
-    candidateHashesByQuery: new Map([[edited.embeddingHash, new Set([edited.embeddingHash])]]),
-  });
-
-  expect(result.comparisons).toBe(0);
-  expect(result.findings).toEqual([]);
 });
 
 test("Meaningful-size and ambiguous Symbols are excluded", () => {

@@ -4,6 +4,9 @@ import { expect, test } from "bun:test";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import { nativeSearch } from "../../src/app.ts";
+import { detectProbableDuplicates, type IndexedSymbol } from "../../src/detector.ts";
+import { configuredEmbeddingProvider } from "../../src/embedding.ts";
 import { searchNativeCandidates } from "../../src/vector-search.ts";
 
 const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
@@ -18,8 +21,51 @@ const vector = (...values: number[]) => {
   return bytes;
 };
 
+const symbol = (name: string, embeddingHash: string): IndexedSymbol => ({
+  path: `src/${name}.ts`,
+  language: "typescript",
+  key: name,
+  qualifiedName: name,
+  kind: "function",
+  startByte: 0,
+  endByte: 1,
+  startRow: 0,
+  startColumn: 0,
+  endRow: 0,
+  endColumn: 1,
+  tokenCount: 20,
+  strictHash: name,
+  normalizedHash: "same-normalized",
+  orderedTokenHashes: new Uint8Array(),
+  qgramHashes: new Uint8Array(),
+  embeddingHash,
+});
+
+const boundaryVectors = () => {
+  const dimensions = 384;
+  const tail = Math.fround(2 ** -12.5 * (1 - 2 ** -22));
+  const tailSquared = (dimensions - 2) * tail * tail;
+  // This keeps application cosine above 0.85 while native cosine falls over 1e-6 below it.
+  const boundaryAdjustment = 0.13 * tailSquared;
+  const query = new Float32Array(dimensions);
+  const candidate = new Float32Array(dimensions);
+
+  query[0] = 1;
+  candidate[0] = Math.fround(0.85 - boundaryAdjustment);
+  candidate[1] = Math.fround(Math.sqrt(1 - candidate[0] ** 2));
+  query.fill(tail, 2);
+  candidate.fill(tail, 2);
+
+  return [query, candidate] as const;
+};
+
 const withIndex = Effect.fn("VectorSearchTest.withIndex")(function* <A, E>(
   use: (indexPath: string, cachePath: string) => Effect.Effect<A, E, BunServices.BunServices>,
+  vectors: ReadonlyArray<readonly [string, Uint8Array]> = [
+    ["exact", vector(1, 0)],
+    ["near", vector(0.8, 0.6)],
+    ["orthogonal", vector(0, 1)],
+  ],
 ) {
   const fs = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;
@@ -37,12 +83,10 @@ const withIndex = Effect.fn("VectorSearchTest.withIndex")(function* <A, E>(
     ) STRICT
   `);
 
-  for (const [hash, bytes] of [
-    ["exact", vector(1, 0)],
-    ["near", vector(0.8, 0.6)],
-    ["orthogonal", vector(0, 1)],
-  ] as const) {
-    database.query("INSERT INTO vectors VALUES (?, ?, 2, ?)").run("identity", hash, bytes);
+  for (const [hash, bytes] of vectors) {
+    database
+      .query("INSERT INTO vectors VALUES (?, ?, ?, ?)")
+      .run("identity", hash, bytes.byteLength / 4, bytes);
   }
 
   database.close();
@@ -75,14 +119,14 @@ test("sqlite-vec retrieves all ordinary vector BLOB candidates by cosine", () =>
             vector(1, 0),
             2,
             { XDG_CACHE_HOME: cachePath },
-            0.21,
+            0.85,
           );
 
           expect(candidates).toEqual([
             ["exact", "near", "orthogonal"],
             ["exact", "near", "orthogonal"],
           ]);
-          expect(thresholded).toEqual(["exact", "near"]);
+          expect(thresholded).toEqual(["exact"]);
 
           const appDirectory = paths.join(cachePath, "antisprawl");
           const [versionDirectory] = yield* fs.readDirectory(appDirectory);
@@ -95,6 +139,75 @@ test("sqlite-vec retrieves all ordinary vector BLOB candidates by cosine", () =>
       ),
     ),
   ));
+
+test("native search wiring preserves boundary Findings while reducing rescoring", () => {
+  const [query, boundary] = boundaryVectors();
+  const far = new Float32Array(query.length);
+
+  far[1] = 1;
+
+  const queryHash = "11".repeat(32);
+  const boundaryHash = "22".repeat(32);
+  const farHash = "33".repeat(32);
+  const edited = symbol("edited", queryHash);
+  const candidate = symbol("candidate", boundaryHash);
+  const rejected = symbol("rejected", farHash);
+
+  const vectors = new Map([
+    [queryHash, query],
+    [boundaryHash, boundary],
+    [farHash, far],
+  ]);
+
+  const provider = configuredEmbeddingProvider("openai", {})!;
+
+  return run(
+    Effect.scoped(
+      withIndex(
+        (indexPath) =>
+          Effect.gen(function* () {
+            const search = yield* nativeSearch(
+              { indexPath, provider },
+              {
+                profile: {
+                  ...provider.profile,
+                  identityHash: "identity",
+                  complete: true,
+                  usage: { requests: 0, inputs: 0, inputTokens: 0, durationMs: 0 },
+                },
+                vectors,
+              },
+              [edited],
+            );
+
+            expect(search.path).toBe("sqlite_vec");
+
+            if (search.path !== "sqlite_vec") throw new Error("Expected native vector search.");
+
+            const fallback = detectProbableDuplicates([edited], [edited, candidate, rejected], {
+              threshold: 0.85,
+              vectors,
+            });
+
+            const native = detectProbableDuplicates([edited], [edited, candidate, rejected], {
+              threshold: 0.85,
+              vectors,
+              candidateHashesByQuery: search.candidateHashesByQuery,
+            });
+
+            expect(native.findings).toEqual(fallback.findings);
+            expect(native.rescored).toBe(1);
+            expect(fallback.rescored).toBe(2);
+          }),
+        [
+          [queryHash, vector(...query)],
+          [boundaryHash, vector(...boundary)],
+          [farHash, vector(...far)],
+        ],
+      ),
+    ),
+  );
+});
 
 test("native digest, extraction, load, and probe failures stay safe", () =>
   run(
