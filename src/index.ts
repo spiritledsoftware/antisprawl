@@ -865,12 +865,12 @@ const activateProfileInSession = Effect.fn("Index.activateProfile")(function* (p
   return new Set(hashes.map(({ input_hash }) => input_hash));
 });
 
-const validateBatch = (profile: Profile, batch: EmbeddedBatch) => {
+const validateBatch = Effect.fnUntraced(function* (profile: Profile, batch: EmbeddedBatch) {
   const seen = new Set<string>();
 
   for (const item of batch.vectors) {
     if (!hashPattern.test(item.hash) || seen.has(item.hash)) {
-      throw appError(
+      return yield* appError(
         "embedding_response_order_invalid",
         "The embedding batch contains invalid identities.",
       );
@@ -879,21 +879,21 @@ const validateBatch = (profile: Profile, batch: EmbeddedBatch) => {
     seen.add(item.hash);
 
     if (item.vector.length !== profile.dimensions) {
-      throw appError(
+      return yield* appError(
         "embedding_vector_dimensions_invalid",
         "The embedding vector has unexpected dimensions.",
       );
     }
 
     if ([...item.vector].some((value) => !Number.isFinite(value))) {
-      throw appError(
+      return yield* appError(
         "embedding_vector_non_finite",
         "The embedding vector contains a non-finite value.",
       );
     }
 
     if ([...item.vector].every((value) => value === 0)) {
-      throw appError("embedding_vector_zero", "The embedding vector is zero.");
+      return yield* appError("embedding_vector_zero", "The embedding vector is zero.");
     }
   }
 
@@ -905,21 +905,18 @@ const validateBatch = (profile: Profile, batch: EmbeddedBatch) => {
       batch.usage.durationMs,
     ].every((value) => Number.isInteger(value) && value >= 0)
   ) {
-    throw appError("embedding_usage_invalid", "The embedding provider returned invalid usage.");
+    return yield* appError(
+      "embedding_usage_invalid",
+      "The embedding provider returned invalid usage.",
+    );
   }
-};
+});
 
 const persistEmbeddingBatchInSession = Effect.fn("Index.persistEmbeddingBatch")(function* (
   profile: Profile,
   batch: EmbeddedBatch,
 ) {
-  yield* Effect.try({
-    try: () => validateBatch(profile, batch),
-    catch: (error) =>
-      isAppError(error)
-        ? error
-        : appError("embedding_batch_invalid", "The embedding batch is invalid."),
-  });
+  yield* validateBatch(profile, batch);
 
   const sql = yield* SqlClient.SqlClient;
 

@@ -6,6 +6,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { Parser } from "web-tree-sitter";
 import { checkProject, indexProject } from "../../src/app.ts";
+import { structuralCheckScenario } from "../acceptance/structural-check.scenario.ts";
 import { structuralIndexScenario } from "../acceptance/structural-index.scenario.ts";
 
 const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
@@ -182,6 +183,59 @@ test("an unreadable requested source leaves the Index unchanged", () =>
 
         expect(error).toMatchObject({ code: "source_unreadable" });
         expect(yield* fs.readFile(indexPath)).toEqual(before);
+      }),
+    ),
+  ));
+
+test("check reports unavailable Embedding input as a typed diagnostic", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const paths = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-currentness-" });
+        const editPath = paths.join(root, "src/edit.ts");
+        const previousProvider = Bun.env.ANTISPRAW_ACCEPTANCE_EMBEDDINGS;
+
+        Bun.env.ANTISPRAW_ACCEPTANCE_EMBEDDINGS = "deterministic-v1";
+
+        yield* Effect.gen(function* () {
+          yield* writeScenario(root);
+          yield* fs.writeFileString(editPath, structuralCheckScenario.sameFilePair);
+          yield* indexProject(root);
+
+          const database = new Database(paths.join(root, ".antisprawl/index.sqlite"));
+
+          database.run(`
+            CREATE TRIGGER remove_unchanged_vector AFTER INSERT ON profile
+            BEGIN
+              DELETE FROM vectors
+              WHERE input_hash = (
+                SELECT embedding_hash FROM symbols WHERE file_path = 'src/jobs.ts'
+              );
+            END
+          `);
+          database.close();
+
+          yield* fs.writeFileString(
+            editPath,
+            `${structuralCheckScenario.sameFilePair}\n// edited\n`,
+          );
+
+          const output = yield* checkProject(root, ["src/edit.ts"]);
+
+          expect(output.diagnostics).toContainEqual({
+            severity: "warning",
+            code: "embedding_input_unavailable",
+          });
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (previousProvider === undefined) delete Bun.env.ANTISPRAW_ACCEPTANCE_EMBEDDINGS;
+              else Bun.env.ANTISPRAW_ACCEPTANCE_EMBEDDINGS = previousProvider;
+            }),
+          ),
+        );
       }),
     ),
   ));

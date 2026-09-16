@@ -1,7 +1,9 @@
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { Database } from "bun:sqlite";
 import { expect, spyOn, test } from "bun:test";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import type { Profile } from "../../src/embedding.ts";
@@ -563,6 +565,37 @@ test("an invalid embedding batch changes neither vectors nor usage", () =>
           inputTokens: 0,
           durationMs: 0,
         });
+      }),
+    ),
+  ));
+
+test("unexpected embedding batch exceptions remain defects", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const indexPath = yield* temporaryIndexPath;
+        const defect = new Error("unexpected batch defect");
+
+        yield* updateIndex(indexPath, identity, [], []);
+        yield* inIndexSession(indexPath, (session) => session.activateProfile(profile));
+
+        const exit = yield* Effect.exit(
+          inIndexSession(indexPath, (session) =>
+            session.persistEmbeddingBatch(profile, {
+              get vectors(): never {
+                throw defect;
+              },
+              usage: { requests: 1, inputs: 1, inputTokens: 1, durationMs: 1 },
+            }),
+          ),
+        );
+
+        expect(exit._tag).toBe("Failure");
+
+        if (Exit.isFailure(exit)) {
+          expect(Cause.hasDies(exit.cause)).toBe(true);
+          expect(Cause.hasFails(exit.cause)).toBe(false);
+        }
       }),
     ),
   ));

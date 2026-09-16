@@ -1,7 +1,71 @@
+import * as BunServices from "@effect/platform-bun/BunServices";
 import { expect, spyOn, test } from "bun:test";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import { Parser } from "web-tree-sitter";
 import { loadBundledTypeScriptGrammar, parseTypeScript } from "../../src/language.ts";
+
+test("rejected bundled grammar asset reads have a sanitized diagnostic", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      for (const failedRead of [1, 2, 3]) {
+        const file = spyOn(Bun, "file");
+        const originalFile = file.getMockImplementation();
+        let reads = 0;
+
+        if (originalFile === undefined) throw new Error("Bun.file is unavailable.");
+
+        file.mockImplementation((path, options) => {
+          reads += 1;
+
+          if (reads === failedRead) {
+            return originalFile(new URL("./missing-grammar-asset", import.meta.url), options);
+          }
+
+          // SAFETY: the loader passes only file-import paths to Bun.file.
+          return originalFile(path as string, options);
+        });
+
+        const error = yield* Effect.flip(loadBundledTypeScriptGrammar()).pipe(
+          Effect.ensuring(Effect.sync(() => file.mockRestore())),
+        );
+
+        expect(error).toMatchObject({
+          code: "grammar_asset_unreadable",
+          message: "The bundled TypeScript grammar cannot be read.",
+        });
+      }
+    }),
+  ));
+
+test("a malformed bundled grammar manifest has a sanitized diagnostic", () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const paths = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-grammar-" });
+        const malformedPath = paths.join(root, "manifest.jsonc");
+
+        yield* fs.writeFileString(malformedPath, "{");
+
+        const malformedManifest = Bun.file(malformedPath);
+        const file = spyOn(Bun, "file");
+
+        file.mockImplementation(() => malformedManifest);
+
+        const error = yield* Effect.flip(loadBundledTypeScriptGrammar()).pipe(
+          Effect.ensuring(Effect.sync(() => file.mockRestore())),
+        );
+
+        expect(error).toMatchObject({
+          code: "grammar_manifest_invalid",
+          message: "Invalid TypeScript grammar manifest.",
+        });
+      }),
+    ).pipe(Effect.provide(BunServices.layer)),
+  ));
 
 test("TypeScript extraction keeps supported recursive named Symbols", () =>
   Effect.runPromise(

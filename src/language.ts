@@ -75,21 +75,31 @@ export interface ParsedFile {
 const sha256 = (value: string | Uint8Array) =>
   new Bun.CryptoHasher("sha256").update(value).digest("hex");
 
+const grammarAssetUnreadable = () =>
+  appError("grammar_asset_unreadable", "The bundled TypeScript grammar cannot be read.");
+
+const grammarManifestInvalid = () =>
+  appError("grammar_manifest_invalid", "Invalid TypeScript grammar manifest.");
+
+const readGrammarAsset = <A>(read: () => Promise<A>) =>
+  Effect.tryPromise({ try: read, catch: grammarAssetUnreadable });
+
 export const loadBundledTypeScriptGrammar = Effect.fn("Language.loadBundledTypeScriptGrammar")(
   function* () {
-    const manifestText = yield* Effect.promise(() => Bun.file(manifestPath).text());
+    const manifestText = yield* readGrammarAsset(() => Bun.file(manifestPath).text());
 
-    const manifest = yield* Schema.decodeUnknownEffect(ManifestSchema)(
-      Bun.JSONC.parse(manifestText),
-    ).pipe(
-      Effect.mapError(() =>
-        appError("grammar_manifest_invalid", "Invalid TypeScript grammar manifest."),
-      ),
+    const manifestJson = yield* Effect.try({
+      try: () => Bun.JSONC.parse(manifestText),
+      catch: grammarManifestInvalid,
+    });
+
+    const manifest = yield* Schema.decodeUnknownEffect(ManifestSchema)(manifestJson).pipe(
+      Effect.mapError(grammarManifestInvalid),
     );
 
-    const bytes = yield* Effect.promise(() => Bun.file(grammarWasmPath).bytes());
+    const bytes = yield* readGrammarAsset(() => Bun.file(grammarWasmPath).bytes());
 
-    const query = yield* Effect.promise(() => Bun.file(queryPath).text());
+    const query = yield* readGrammarAsset(() => Bun.file(queryPath).text());
 
     if (bytes.byteLength !== manifest.parser.artifact.size) {
       return yield* appError(
