@@ -297,8 +297,9 @@ Issue #18 adds two fixed providers behind the same internal seam. Both use Bun's
 - require file-backed ChatGPT/Codex authentication;
 - send the access token as a bearer token to the embeddings endpoint;
 - use JWT expiry only to schedule refresh within five minutes of expiry;
-- lock and re-read the auth file before refresh, adopt newer on-disk credentials, and never overwrite a file changed concurrently by Codex;
-- preserve unknown fields and atomically persist successful token rotation;
+- lock and re-read the auth file before refresh, prepare the replacement, then compare the exact on-disk bytes immediately before persistence;
+- preserve and adopt different usable credentials observed by that final comparison, or fail without mutation when only other bytes changed;
+- preserve unknown fields and atomically persist successful token rotation; the filesystem has no atomic compare-and-replace operation, so a Codex write after the final comparison can still race with the rename;
 - retry the embeddings request exactly once after a successful refresh from `401`;
 - never log or expose tokens; and
 - leave the auth file byte-for-byte unchanged when refresh fails.

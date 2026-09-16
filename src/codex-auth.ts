@@ -66,11 +66,7 @@ const resolveAuthPath = Effect.fn("CodexAuth.resolvePath")(function* (
   return paths.join(root, "auth.json");
 });
 
-const readAuth = Effect.fn("CodexAuth.read")(function* (path: string, error: AppError) {
-  const fs = yield* FileSystem.FileSystem;
-
-  const text = yield* fs.readFileString(path).pipe(Effect.mapError(() => error));
-
+const decodeAuth = Effect.fn("CodexAuth.decode")(function* (text: string, error: AppError) {
   const unknown = yield* Schema.decodeEffect(Json)(text).pipe(Effect.mapError(() => error));
 
   const raw = yield* Schema.decodeUnknownEffect(UnknownRecord)(unknown).pipe(
@@ -94,6 +90,13 @@ const readAuth = Effect.fn("CodexAuth.read")(function* (path: string, error: App
     accessToken: decoded.tokens.access_token,
     refreshToken: decoded.tokens.refresh_token,
   } satisfies DecodedAuth;
+});
+
+const readAuth = Effect.fn("CodexAuth.read")(function* (path: string, error: AppError) {
+  const fs = yield* FileSystem.FileSystem;
+  const text = yield* fs.readFileString(path).pipe(Effect.mapError(() => error));
+
+  return yield* decodeAuth(text, error);
 });
 
 const jwtExpiry = (token: string): number | undefined => {
@@ -159,15 +162,28 @@ const encodeAuth = Effect.fn("CodexAuth.encode")(function* (
   }).pipe(Effect.mapError(() => refreshFailure()));
 });
 
-const replaceAuth = Effect.fn("CodexAuth.replace")(function* (path: string, contents: string) {
+const replaceAuth = Effect.fn("CodexAuth.replace")(function* (
+  path: string,
+  expected: DecodedAuth,
+  contents: string,
+) {
   const fs = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;
   const crypto = yield* Crypto.Crypto;
   const suffix = yield* crypto.randomUUIDv4.pipe(Effect.mapError(() => refreshFailure()));
   const temporary = paths.join(paths.dirname(path), `.auth.json.${suffix}.tmp`);
 
-  yield* fs.writeFileString(temporary, `${contents}\n`, { flag: "wx", mode: 0o600 }).pipe(
-    Effect.andThen(fs.rename(temporary, path)),
+  return yield* Effect.gen(function* () {
+    yield* fs.writeFileString(temporary, `${contents}\n`, { flag: "wx", mode: 0o600 });
+
+    const latestText = yield* fs.readFileString(path);
+
+    if (latestText !== expected.text) {
+      return (yield* decodeAuth(latestText, refreshFailure())).accessToken;
+    }
+
+    yield* fs.rename(temporary, path);
+  }).pipe(
     Effect.ensuring(fs.remove(temporary, { force: true }).pipe(Effect.ignore)),
     Effect.mapError(() => refreshFailure()),
   );
@@ -184,7 +200,6 @@ const refreshAccessToken = Effect.fn("CodexAuth.refresh")(function* (
     acquireLock(lockPath),
     () =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
         const auth = yield* readAuth(path, refreshFailure());
 
         if (auth.accessToken !== expectedAccessToken) return auth.accessToken;
@@ -227,17 +242,15 @@ const refreshAccessToken = Effect.fn("CodexAuth.refresh")(function* (
 
         if (refreshed.access_token.length === 0) return yield* refreshFailure();
 
-        const latestText = yield* fs
-          .readFileString(path)
-          .pipe(Effect.mapError(() => refreshFailure()));
+        const externalAccessToken = yield* replaceAuth(
+          path,
+          auth,
+          yield* encodeAuth(auth, refreshed),
+        );
 
-        if (latestText !== auth.text) {
-          return (yield* readAuth(path, refreshFailure())).accessToken;
-        }
+        if (externalAccessToken === auth.accessToken) return yield* refreshFailure();
 
-        yield* replaceAuth(path, yield* encodeAuth(auth, refreshed));
-
-        return refreshed.access_token;
+        return externalAccessToken ?? refreshed.access_token;
       }),
     () => releaseLock(lockPath),
   );

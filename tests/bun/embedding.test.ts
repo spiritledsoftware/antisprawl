@@ -27,6 +27,38 @@ const makeCodexHome = Effect.gen(function* () {
   return { fs, root, authPath: paths.join(root, "auth.json") };
 });
 
+const rotateCodexAuthAfterReplacementPrepared = (
+  fs: FileSystem.FileSystem,
+  authPath: string,
+  rotated: string,
+) => {
+  let replacementPrepared = false;
+  let injected = false;
+
+  return {
+    ...fs,
+    writeFileString: (path, contents, options) =>
+      fs.writeFileString(path, contents, options).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            if (path !== authPath && path.endsWith(".tmp")) replacementPrepared = true;
+          }),
+        ),
+      ),
+    readFileString: (path, encoding) => {
+      if (path !== authPath || !replacementPrepared || injected) {
+        return fs.readFileString(path, encoding);
+      }
+
+      injected = true;
+
+      return fs
+        .writeFileString(authPath, rotated)
+        .pipe(Effect.andThen(fs.readFileString(path, encoding)));
+    },
+  } satisfies FileSystem.FileSystem;
+};
+
 test("vectors use canonical little-endian float32 bytes and application cosine", () => {
   const bytes = encodeVector([1, -2.5]);
 
@@ -197,6 +229,7 @@ test("the Codex provider refreshes after 401 without losing auth fields", () =>
             preserve: "token-field",
           },
         });
+        expect((yield* fs.stat(authPath)).mode & 0o777).toBe(0o600);
       }),
     ),
   ));
@@ -406,7 +439,7 @@ test("Codex lock cleanup failures become refresh failures", () =>
     ),
   ));
 
-test("Codex refresh adopts credentials rotated by another process", () =>
+test("Codex refresh adopts credentials rotated after its replacement is prepared", () =>
   run(
     Effect.scoped(
       Effect.gen(function* () {
@@ -415,15 +448,14 @@ test("Codex refresh adopts credentials rotated by another process", () =>
         const initial = `{"auth_mode":"chatgpt","tokens":{"access_token":"old-access","refresh_token":"old-refresh","id_token":"${jwt}"}}\n`;
         const rotated = `{"auth_mode":"chatgpt","tokens":{"access_token":"codex-access","refresh_token":"codex-refresh","id_token":"${jwt}"},"rotation":"codex"}\n`;
         const vector = Array.from({ length: 384 }, (_, index) => (index === 0 ? 1 : 0));
+        const rotatingFileSystem = rotateCodexAuthAfterReplacementPrepared(fs, authPath, rotated);
 
         yield* fs.writeFileString(authPath, initial);
 
         // @effect-diagnostics-next-line asyncFunction:off
         const fetcher = async (input: string, init: RequestInit) => {
           if (input === "https://auth.openai.com/oauth/token") {
-            return Bun.write(authPath, rotated).then(() =>
-              Response.json({ access_token: "antisprawl-access" }),
-            );
+            return Response.json({ access_token: "antisprawl-access" });
           }
 
           const authorization = new Headers(init.headers).get("authorization");
@@ -442,8 +474,45 @@ test("Codex refresh adopts credentials rotated by another process", () =>
 
         yield* runEmbeddingBatch(provider!, [
           { index: 0, hash: "a".repeat(64), input: "typescript function example" },
-        ]);
+        ]).pipe(Effect.provideService(FileSystem.FileSystem, rotatingFileSystem));
 
+        expect(yield* fs.readFileString(authPath)).toBe(rotated);
+      }),
+    ),
+  ));
+
+test("Codex refresh preserves raced auth when its access token did not change", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { fs, root, authPath } = yield* makeCodexHome;
+        const jwt = `header.${Buffer.from('{"exp":4102444800}').toString("base64url")}.signature`;
+        const initial = `{"auth_mode":"chatgpt","tokens":{"access_token":"old-access","refresh_token":"old-refresh","id_token":"${jwt}"}}\n`;
+        const rotated = `{"auth_mode":"chatgpt","tokens":{"access_token":"old-access","refresh_token":"codex-secret","id_token":"${jwt}"},"rotation":"secret-marker"}\n`;
+        const rotatingFileSystem = rotateCodexAuthAfterReplacementPrepared(fs, authPath, rotated);
+
+        yield* fs.writeFileString(authPath, initial);
+
+        const provider = configuredEmbeddingProvider(
+          "openai-codex",
+          { CODEX_HOME: root },
+          // @effect-diagnostics-next-line asyncFunction:off
+          async (input) =>
+            input === "https://auth.openai.com/oauth/token"
+              ? Response.json({ access_token: "antisprawl-access" })
+              : new Response(null, { status: 401 }),
+        );
+
+        const error = yield* Effect.flip(
+          runEmbeddingBatch(provider!, [
+            { index: 0, hash: "a".repeat(64), input: "typescript function example" },
+          ]).pipe(Effect.provideService(FileSystem.FileSystem, rotatingFileSystem)),
+        );
+
+        expect(error).toMatchObject({
+          code: "embedding_refresh_failed",
+          message: "Embedding authentication could not be refreshed.",
+        });
         expect(yield* fs.readFileString(authPath)).toBe(rotated);
       }),
     ),
