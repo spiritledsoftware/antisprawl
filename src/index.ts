@@ -100,6 +100,10 @@ const CountRows = Schema.Array(Schema.Struct({ count: Schema.Int }));
 
 const PresentRows = Schema.Array(Schema.Struct({ present: Schema.Int }));
 
+const VectorHashRows = Schema.Array(
+  Schema.Struct({ input_hash: Schema.String, dimensions: Schema.Int }),
+);
+
 const hashPattern = /^[0-9a-f]{64}$/;
 
 const zeroUsage: EmbeddingUsage = { requests: 0, inputs: 0, inputTokens: 0, durationMs: 0 };
@@ -159,6 +163,21 @@ export interface IndexSnapshot {
   readonly vectors: ReadonlyMap<string, Float32Array>;
 }
 
+export interface IndexSession {
+  readonly activateProfile: (profile: Profile) => Effect.Effect<ReadonlySet<string>, AppError>;
+  readonly updateIndex: (
+    currentFiles: ReadonlyArray<CurrentFile>,
+    replacements: ReadonlyArray<FileRecord>,
+  ) => Effect.Effect<IndexWork, AppError>;
+  readonly persistEmbeddingBatch: (
+    profile: Profile,
+    batch: EmbeddedBatch,
+  ) => Effect.Effect<{ readonly indexed: number; readonly reused: number }, AppError>;
+  readonly completeProfile: (
+    profile: Profile,
+  ) => Effect.Effect<{ readonly removed: number }, AppError>;
+}
+
 type ExistingFileRow = (typeof ExistingFileRows.Type)[number];
 
 type SymbolRow = (typeof SymbolRows.Type)[number];
@@ -180,6 +199,8 @@ type IntegrityRow = (typeof IntegrityRows.Type)[number];
 type CountRow = (typeof CountRows.Type)[number];
 
 type PresentRow = (typeof PresentRows.Type)[number];
+
+type VectorHashRow = (typeof VectorHashRows.Type)[number];
 
 const emptySnapshot = (): IndexSnapshot => ({ files: new Map(), symbols: [], vectors: new Map() });
 
@@ -631,6 +652,117 @@ const replaceFile = Effect.fn("Index.replaceFile")(function* (file: FileRecord) 
   }
 });
 
+const updateIndexInSession = Effect.fn("Index.updateInSession")(function* (
+  identity: IndexIdentity,
+  previous: IndexSnapshot,
+  currentFiles: ReadonlyArray<CurrentFile>,
+  replacements: ReadonlyArray<FileRecord>,
+  expectedFiles?: ReadonlyMap<string, IndexedFile>,
+) {
+  const sql = yield* SqlClient.SqlClient;
+
+  yield* sql`PRAGMA foreign_keys = ON`;
+
+  return yield* sql.withTransaction(
+    Effect.gen(function* () {
+      yield* initializeSchema(identity);
+
+      if (expectedFiles !== undefined) {
+        const rows = yield* sql<ExistingFileRow>`
+          SELECT path, content_hash, language, parse_status, symbol_count FROM files
+        `;
+
+        const files = yield* Schema.decodeEffect(ExistingFileRows)(rows).pipe(
+          Effect.mapError(invalidIndex),
+        );
+
+        if (
+          files.length !== expectedFiles.size ||
+          files.some((file) => {
+            const expected = expectedFiles.get(file.path);
+
+            return (
+              expected === undefined ||
+              expected.contentHash !== file.content_hash ||
+              expected.parseStatus !== file.parse_status ||
+              expected.symbolCount !== file.symbol_count
+            );
+          })
+        ) {
+          return yield* appError(
+            "index_currentness_changed",
+            "Index currentness changed during processing.",
+          );
+        }
+      }
+
+      const currentPaths = new Set(currentFiles.map((file) => file.path));
+      const replacementByPath = new Map(replacements.map((file) => [file.path, file]));
+      const removesFiles = [...previous.files.keys()].some((path) => !currentPaths.has(path));
+
+      if (replacements.length > 0 || removesFiles) {
+        yield* sql`UPDATE profile SET complete = 0 WHERE singleton = 1`;
+      }
+
+      let indexedFiles = 0;
+      let reusedFiles = 0;
+      let indexedSymbols = 0;
+      let reusedSymbols = 0;
+      let removedFiles = 0;
+      let removedSymbols = 0;
+
+      for (const current of currentFiles) {
+        const prior = previous.files.get(current.path);
+        const replacement = replacementByPath.get(current.path);
+
+        if (replacement !== undefined) {
+          const priorNames = previous.symbols.filter((symbol) => symbol.path === current.path);
+          const nextNames = new Map<string, number>();
+
+          for (const symbol of replacement.symbols) {
+            nextNames.set(symbol.qualifiedName, (nextNames.get(symbol.qualifiedName) ?? 0) + 1);
+          }
+
+          for (const symbol of priorNames) {
+            const remaining = nextNames.get(symbol.qualifiedName) ?? 0;
+
+            if (remaining === 0) removedSymbols += 1;
+            else nextNames.set(symbol.qualifiedName, remaining - 1);
+          }
+
+          yield* replaceFile(replacement);
+          indexedFiles += 1;
+          indexedSymbols += replacement.symbols.length;
+          continue;
+        }
+
+        if (prior?.contentHash !== current.contentHash) {
+          return yield* appError(
+            "index_currentness_changed",
+            "Index currentness changed during processing.",
+          );
+        }
+
+        reusedFiles += 1;
+        reusedSymbols += prior.symbolCount;
+      }
+
+      for (const [path, file] of previous.files) {
+        if (currentPaths.has(path)) continue;
+
+        yield* sql`DELETE FROM files WHERE path = ${path}`;
+        removedFiles += 1;
+        removedSymbols += file.symbolCount;
+      }
+
+      return {
+        files: { indexed: indexedFiles, reused: reusedFiles, removed: removedFiles },
+        symbols: { indexed: indexedSymbols, reused: reusedSymbols, removed: removedSymbols },
+      } satisfies IndexWork;
+    }),
+  );
+});
+
 export const updateIndex = Effect.fn("Index.update")(function* (
   indexPath: string,
   identity: IndexIdentity,
@@ -647,81 +779,7 @@ export const updateIndex = Effect.fn("Index.update")(function* (
       Effect.mapError(() => appError("index_unwritable", "The Index directory cannot be created.")),
     );
 
-  const write = Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-
-    yield* sql`PRAGMA foreign_keys = ON`;
-
-    return yield* sql.withTransaction(
-      Effect.gen(function* () {
-        yield* initializeSchema(identity);
-
-        const currentPaths = new Set(currentFiles.map((file) => file.path));
-        const replacementByPath = new Map(replacements.map((file) => [file.path, file]));
-        const removesFiles = [...previous.files.keys()].some((path) => !currentPaths.has(path));
-
-        if (replacements.length > 0 || removesFiles) {
-          yield* sql`UPDATE profile SET complete = 0 WHERE singleton = 1`;
-        }
-
-        let indexedFiles = 0;
-        let reusedFiles = 0;
-        let indexedSymbols = 0;
-        let reusedSymbols = 0;
-        let removedFiles = 0;
-        let removedSymbols = 0;
-
-        for (const current of currentFiles) {
-          const prior = previous.files.get(current.path);
-          const replacement = replacementByPath.get(current.path);
-
-          if (replacement !== undefined) {
-            const priorNames = previous.symbols.filter((symbol) => symbol.path === current.path);
-            const nextNames = new Map<string, number>();
-
-            for (const symbol of replacement.symbols) {
-              nextNames.set(symbol.qualifiedName, (nextNames.get(symbol.qualifiedName) ?? 0) + 1);
-            }
-
-            for (const symbol of priorNames) {
-              const remaining = nextNames.get(symbol.qualifiedName) ?? 0;
-
-              if (remaining === 0) removedSymbols += 1;
-              else nextNames.set(symbol.qualifiedName, remaining - 1);
-            }
-
-            yield* replaceFile(replacement);
-            indexedFiles += 1;
-            indexedSymbols += replacement.symbols.length;
-            continue;
-          }
-
-          if (prior?.contentHash !== current.contentHash) {
-            return yield* appError(
-              "index_currentness_changed",
-              "Index currentness changed during processing.",
-            );
-          }
-
-          reusedFiles += 1;
-          reusedSymbols += prior.symbolCount;
-        }
-
-        for (const [path, file] of previous.files) {
-          if (currentPaths.has(path)) continue;
-
-          yield* sql`DELETE FROM files WHERE path = ${path}`;
-          removedFiles += 1;
-          removedSymbols += file.symbolCount;
-        }
-
-        return {
-          files: { indexed: indexedFiles, reused: reusedFiles, removed: removedFiles },
-          symbols: { indexed: indexedSymbols, reused: reusedSymbols, removed: removedSymbols },
-        } satisfies IndexWork;
-      }),
-    );
-  }).pipe(
+  return yield* updateIndexInSession(identity, previous, currentFiles, replacements).pipe(
     Effect.provide(SqliteClient.layer({ filename: indexPath, disableWAL: true })),
     Effect.scoped,
     Effect.mapError((error) =>
@@ -730,8 +788,6 @@ export const updateIndex = Effect.fn("Index.update")(function* (
         : appError("index_update_failed", "The Index could not be updated safely."),
     ),
   );
-
-  return yield* write;
 });
 
 export const replaceIndex = Effect.fn("Index.replace")(function* (
@@ -765,56 +821,48 @@ export const replaceIndex = Effect.fn("Index.replace")(function* (
   );
 });
 
-const withWritableIndex = <A, E>(
-  indexPath: string,
-  identity: IndexIdentity,
-  operation: Effect.Effect<A, E, SqlClient.SqlClient>,
-) =>
-  readIndex(indexPath, identity).pipe(
-    Effect.andThen(
-      operation.pipe(
-        Effect.provide(SqliteClient.layer({ filename: indexPath, disableWAL: true })),
-        Effect.scoped,
-        Effect.mapError((error) =>
-          isAppError(error)
-            ? error
-            : appError("index_update_failed", "The Index could not be updated safely."),
-        ),
-      ),
-    ),
+const activateProfileInSession = Effect.fn("Index.activateProfile")(function* (profile: Profile) {
+  const sql = yield* SqlClient.SqlClient;
+  const identityHash = embeddingIdentityHash(profile);
+
+  yield* sql.withTransaction(
+    Effect.gen(function* () {
+      const previous = yield* readProfile();
+      const usage = previous?.identityHash === identityHash ? previous.usage : zeroUsage;
+
+      yield* sql`
+        INSERT OR REPLACE INTO profile (
+          singleton, embedding_identity, provider, model, dimensions, language,
+          embedding_representation, detector_version, semantic_threshold, calibration_state,
+          complete, usage_requests, usage_inputs, usage_input_tokens, usage_duration_ms
+        ) VALUES (
+          1, ${identityHash}, ${profile.provider}, ${profile.model}, ${profile.dimensions},
+          ${profile.language}, ${profile.representation}, ${profile.detector},
+          ${profile.semanticThreshold}, ${profile.calibration}, 0, ${usage.requests},
+          ${usage.inputs}, ${usage.inputTokens}, ${usage.durationMs}
+        )
+      `;
+    }),
   );
 
-export const activateProfile = Effect.fn("Index.activateProfile")(function* (
-  indexPath: string,
-  identity: IndexIdentity,
-  profile: Profile,
-) {
-  const operation = Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
+  const rows = yield* sql<VectorHashRow>`
+    SELECT input_hash, dimensions FROM vectors WHERE embedding_identity = ${identityHash}
+  `;
 
-    return yield* sql.withTransaction(
-      Effect.gen(function* () {
-        const previous = yield* readProfile();
-        const identityHash = embeddingIdentityHash(profile);
-        const usage = previous?.identityHash === identityHash ? previous.usage : zeroUsage;
+  const hashes = yield* Schema.decodeEffect(VectorHashRows)(rows).pipe(
+    Effect.mapError(invalidIndex),
+  );
 
-        yield* sql`
-          INSERT OR REPLACE INTO profile (
-            singleton, embedding_identity, provider, model, dimensions, language,
-            embedding_representation, detector_version, semantic_threshold, calibration_state,
-            complete, usage_requests, usage_inputs, usage_input_tokens, usage_duration_ms
-          ) VALUES (
-            1, ${identityHash}, ${profile.provider}, ${profile.model}, ${profile.dimensions},
-            ${profile.language}, ${profile.representation}, ${profile.detector},
-            ${profile.semanticThreshold}, ${profile.calibration}, 0, ${usage.requests},
-            ${usage.inputs}, ${usage.inputTokens}, ${usage.durationMs}
-          )
-        `;
-      }),
-    );
-  });
+  if (
+    hashes.some(
+      ({ input_hash, dimensions }) =>
+        !hashPattern.test(input_hash) || dimensions !== profile.dimensions,
+    )
+  ) {
+    return yield* invalidIndex();
+  }
 
-  return yield* withWritableIndex(indexPath, identity, operation);
+  return new Set(hashes.map(({ input_hash }) => input_hash));
 });
 
 const validateBatch = (profile: Profile, batch: EmbeddedBatch) => {
@@ -861,9 +909,7 @@ const validateBatch = (profile: Profile, batch: EmbeddedBatch) => {
   }
 };
 
-export const persistEmbeddingBatch = Effect.fn("Index.persistEmbeddingBatch")(function* (
-  indexPath: string,
-  identity: IndexIdentity,
+const persistEmbeddingBatchInSession = Effect.fn("Index.persistEmbeddingBatch")(function* (
   profile: Profile,
   batch: EmbeddedBatch,
 ) {
@@ -875,121 +921,142 @@ export const persistEmbeddingBatch = Effect.fn("Index.persistEmbeddingBatch")(fu
         : appError("embedding_batch_invalid", "The embedding batch is invalid."),
   });
 
-  const operation = Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
+  const sql = yield* SqlClient.SqlClient;
 
-    return yield* sql.withTransaction(
-      Effect.gen(function* () {
-        const active = yield* readProfile();
+  return yield* sql.withTransaction(
+    Effect.gen(function* () {
+      const active = yield* readProfile();
 
-        if (active === undefined || !profileMatches(active, profile)) {
-          return yield* appError(
-            "embedding_profile_changed",
-            "The active Profile changed during indexing.",
-          );
-        }
+      if (active === undefined || !profileMatches(active, profile)) {
+        return yield* appError(
+          "embedding_profile_changed",
+          "The active Profile changed during indexing.",
+        );
+      }
 
-        let indexed = 0;
-        let reused = 0;
+      let indexed = 0;
+      let reused = 0;
 
-        for (const item of batch.vectors) {
-          const rows = yield* sql<PresentRow>`
-            SELECT 1 AS present FROM vectors
-            WHERE embedding_identity = ${active.identityHash} AND input_hash = ${item.hash}
-          `;
+      for (const item of batch.vectors) {
+        const rows = yield* sql<PresentRow>`
+          SELECT 1 AS present FROM vectors
+          WHERE embedding_identity = ${active.identityHash} AND input_hash = ${item.hash}
+        `;
 
-          const present = yield* Schema.decodeEffect(PresentRows)(rows).pipe(
-            Effect.mapError(invalidIndex),
-          );
+        const present = yield* Schema.decodeEffect(PresentRows)(rows).pipe(
+          Effect.mapError(invalidIndex),
+        );
 
-          if (present.length === 0) indexed += 1;
-          else reused += 1;
-
-          yield* sql`
-            INSERT OR REPLACE INTO vectors (embedding_identity, input_hash, dimensions, vector)
-            VALUES (
-              ${active.identityHash}, ${item.hash}, ${profile.dimensions},
-              ${encodeVector([...item.vector])}
-            )
-          `;
-        }
+        if (present.length === 0) indexed += 1;
+        else reused += 1;
 
         yield* sql`
-          UPDATE profile SET
-            usage_requests = usage_requests + ${batch.usage.requests},
-            usage_inputs = usage_inputs + ${batch.usage.inputs},
-            usage_input_tokens = usage_input_tokens + ${batch.usage.inputTokens},
-            usage_duration_ms = usage_duration_ms + ${batch.usage.durationMs}
-          WHERE singleton = 1
+          INSERT OR REPLACE INTO vectors (embedding_identity, input_hash, dimensions, vector)
+          VALUES (
+            ${active.identityHash}, ${item.hash}, ${profile.dimensions},
+            ${encodeVector([...item.vector])}
+          )
         `;
+      }
 
-        return { indexed, reused };
-      }),
-    );
-  });
+      yield* sql`
+        UPDATE profile SET
+          usage_requests = usage_requests + ${batch.usage.requests},
+          usage_inputs = usage_inputs + ${batch.usage.inputs},
+          usage_input_tokens = usage_input_tokens + ${batch.usage.inputTokens},
+          usage_duration_ms = usage_duration_ms + ${batch.usage.durationMs}
+        WHERE singleton = 1
+      `;
 
-  return yield* withWritableIndex(indexPath, identity, operation);
+      return { indexed, reused };
+    }),
+  );
 });
 
-export const completeProfile = Effect.fn("Index.completeProfile")(function* (
+const completeProfileInSession = Effect.fn("Index.completeProfile")(function* (profile: Profile) {
+  const sql = yield* SqlClient.SqlClient;
+
+  return yield* sql.withTransaction(
+    Effect.gen(function* () {
+      const active = yield* readProfile();
+
+      if (active === undefined || !profileMatches(active, profile)) {
+        return yield* appError(
+          "embedding_profile_changed",
+          "The active Profile changed during indexing.",
+        );
+      }
+
+      const missingRows = yield* sql<CountRow>`
+        SELECT COUNT(*) AS count FROM symbols
+        WHERE token_count >= ${structuralPolicy.minimumTokens}
+          AND NOT EXISTS (
+            SELECT 1 FROM vectors
+            WHERE vectors.embedding_identity = ${active.identityHash}
+              AND vectors.input_hash = symbols.embedding_hash
+          )
+      `;
+
+      const missing = yield* Schema.decodeEffect(CountRows)(missingRows).pipe(
+        Effect.mapError(invalidIndex),
+      );
+
+      if (missing[0]?.count !== 0) {
+        return yield* appError(
+          "embedding_index_incomplete",
+          "The active Profile still has missing vectors.",
+        );
+      }
+
+      const removedRows = yield* sql<PresentRow>`
+        DELETE FROM vectors
+        WHERE embedding_identity != ${active.identityHash}
+           OR NOT EXISTS (
+             SELECT 1 FROM symbols WHERE symbols.embedding_hash = vectors.input_hash
+           )
+        RETURNING 1 AS present
+      `;
+
+      const removed = yield* Schema.decodeEffect(PresentRows)(removedRows).pipe(
+        Effect.mapError(invalidIndex),
+      );
+
+      yield* sql`UPDATE profile SET complete = 1 WHERE singleton = 1`;
+
+      return { removed: removed.length };
+    }),
+  );
+});
+
+export const withIndexSession = <A, E, R>(
   indexPath: string,
   identity: IndexIdentity,
-  profile: Profile,
-) {
-  const operation = Effect.gen(function* () {
+  snapshot: IndexSnapshot,
+  use: (session: IndexSession) => Effect.Effect<A, E, R>,
+) =>
+  Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
 
-    return yield* sql.withTransaction(
-      Effect.gen(function* () {
-        const active = yield* readProfile();
+    const write = <T>(effect: Effect.Effect<T, unknown, SqlClient.SqlClient>) =>
+      effect.pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+        Effect.mapError((error) =>
+          isAppError(error)
+            ? error
+            : appError("index_update_failed", "The Index could not be updated safely."),
+        ),
+      );
 
-        if (active === undefined || !profileMatches(active, profile)) {
-          return yield* appError(
-            "embedding_profile_changed",
-            "The active Profile changed during indexing.",
-          );
-        }
-
-        const missingRows = yield* sql<CountRow>`
-          SELECT COUNT(*) AS count FROM symbols
-          WHERE token_count >= ${structuralPolicy.minimumTokens}
-            AND NOT EXISTS (
-              SELECT 1 FROM vectors
-              WHERE vectors.embedding_identity = ${active.identityHash}
-                AND vectors.input_hash = symbols.embedding_hash
-            )
-        `;
-
-        const missing = yield* Schema.decodeEffect(CountRows)(missingRows).pipe(
-          Effect.mapError(invalidIndex),
-        );
-
-        if (missing[0]?.count !== 0) {
-          return yield* appError(
-            "embedding_index_incomplete",
-            "The active Profile still has missing vectors.",
-          );
-        }
-
-        const removedRows = yield* sql<PresentRow>`
-          DELETE FROM vectors
-          WHERE embedding_identity != ${active.identityHash}
-             OR NOT EXISTS (
-               SELECT 1 FROM symbols WHERE symbols.embedding_hash = vectors.input_hash
-             )
-          RETURNING 1 AS present
-        `;
-
-        const removed = yield* Schema.decodeEffect(PresentRows)(removedRows).pipe(
-          Effect.mapError(invalidIndex),
-        );
-
-        yield* sql`UPDATE profile SET complete = 1 WHERE singleton = 1`;
-
-        return { removed: removed.length };
-      }),
-    );
-  });
-
-  return yield* withWritableIndex(indexPath, identity, operation);
-});
+    return yield* use({
+      activateProfile: (profile) => write(activateProfileInSession(profile)),
+      updateIndex: (currentFiles, replacements) =>
+        write(updateIndexInSession(identity, snapshot, currentFiles, replacements, snapshot.files)),
+      persistEmbeddingBatch: (profile, batch) =>
+        write(persistEmbeddingBatchInSession(profile, batch)),
+      completeProfile: (profile) => write(completeProfileInSession(profile)),
+    });
+  }).pipe(
+    Effect.provide(SqliteClient.layer({ filename: indexPath, disableWAL: true })),
+    Effect.scoped,
+    Effect.withSpan("Index.withSession"),
+  );

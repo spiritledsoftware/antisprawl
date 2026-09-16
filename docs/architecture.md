@@ -331,6 +331,8 @@ Quantized search requires recall benchmarks before enablement. ANN indexes are a
 
 An interrupted full index commits completed provider batches and aggregate usage, exits `130`, and resumes only missing Embedding-input hashes. Coverage remains partial until an explicit `index` completes it. No `check` invocation backfills unrelated missing vectors or a missing, changed, or incomplete Profile; it uses Structural-only analysis and directs the user to `index`. With a matching completed Profile, `check` may embed only changed eligible Symbols.
 
+A command reuses one scoped ordinary SQLite session during semantic persistence. Provenance is validated once before the first write; Profile activation, every complete embedding batch, structural replacement, and Profile completion retain separate transactions, and provider calls never run inside a transaction. Each write transaction revalidates the mutable state it depends on.
+
 A configuration or schema incompatibility never triggers a surprise rebuild from a hook. The Index becomes stale, and one diagnostic per session asks for an explicit `antisprawl index`. Structural replacement remains atomic. Semantic indexing then makes only complete provider batches durable so interruption leaves a readable, resumable partial Index.
 
 ## 11. Incremental operation and concurrency
