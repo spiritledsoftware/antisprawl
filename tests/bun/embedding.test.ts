@@ -19,6 +19,33 @@ const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
 
 const permissionDenied = "PermissionDenied" as const;
 
+const codexToken = (payload: { readonly exp?: number }) =>
+  `e30.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.c2ln`;
+
+const singleEmbeddingRequest = [
+  { index: 0, hash: "a".repeat(64), input: "typescript function example" },
+];
+
+const embeddingResponse = (
+  index = 0,
+  usage: { readonly prompt_tokens: number; readonly total_tokens: number } = {
+    prompt_tokens: 1,
+    total_tokens: 1,
+  },
+) =>
+  Response.json({
+    object: "list",
+    data: [
+      {
+        object: "embedding",
+        index,
+        embedding: Array.from({ length: 384 }, (_, value) => (value === 0 ? 1 : 0)),
+      },
+    ],
+    model: "text-embedding-3-small",
+    usage,
+  });
+
 const makeCodexHome = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;
@@ -175,29 +202,169 @@ test("the OpenAI provider rejects out-of-order response indices", () => {
   );
 });
 
+test("the OpenAI provider rejects malformed indices and usage", () =>
+  run(
+    Effect.gen(function* () {
+      for (const [index, usage] of [
+        [-1, { prompt_tokens: 1, total_tokens: 1 }],
+        [0.5, { prompt_tokens: 1, total_tokens: 1 }],
+        [0, { prompt_tokens: -1, total_tokens: 0 }],
+        [0, { prompt_tokens: 0.5, total_tokens: 1 }],
+        [0, { prompt_tokens: 0, total_tokens: -1 }],
+        [0, { prompt_tokens: 0, total_tokens: 0.5 }],
+        [0, { prompt_tokens: 1, total_tokens: 0 }],
+      ] as const) {
+        const provider = configuredEmbeddingProvider(
+          "openai",
+          { OPENAI_API_KEY: "test-key" },
+          // @effect-diagnostics-next-line asyncFunction:off
+          async () => embeddingResponse(index, usage),
+        );
+
+        const error = yield* Effect.flip(runEmbeddingBatch(provider!, singleEmbeddingRequest));
+
+        expect(error.code).toBe("embedding_response_invalid");
+      }
+    }),
+  ));
+
+test("embedding batches reject malformed provider indices and usage", () => {
+  const provider = configuredEmbeddingProvider(undefined, {
+    ANTISPRAW_ACCEPTANCE_EMBEDDINGS: "deterministic-v1",
+  })!;
+
+  const valid = {
+    vectors: [{ index: 0, hash: singleEmbeddingRequest[0]!.hash, vector: [1, 0] }],
+    usage: { inputTokens: 1, durationMs: 1 },
+  };
+
+  const responses = [
+    { ...valid, vectors: [{ ...valid.vectors[0]!, index: -1 }] },
+    { ...valid, vectors: [{ ...valid.vectors[0]!, index: 0.5 }] },
+    { ...valid, usage: { ...valid.usage, inputTokens: -1 } },
+    { ...valid, usage: { ...valid.usage, inputTokens: 0.5 } },
+    { ...valid, usage: { ...valid.usage, durationMs: -1 } },
+    { ...valid, usage: { ...valid.usage, durationMs: 0.5 } },
+  ];
+
+  return run(
+    Effect.gen(function* () {
+      for (const response of responses) {
+        const error = yield* Effect.flip(
+          runEmbeddingBatch(
+            { ...provider, embed: () => Effect.succeed(response) },
+            singleEmbeddingRequest,
+          ),
+        );
+
+        expect(error.code).toBe("embedding_response_invalid");
+      }
+    }),
+  );
+});
+
+test("the Codex provider validates credentials before requesting embeddings", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { fs, root, authPath } = yield* makeCodexHome;
+        let requests = 0;
+
+        const provider = configuredEmbeddingProvider(
+          "openai-codex",
+          { CODEX_HOME: root },
+          // @effect-diagnostics-next-line asyncFunction:off
+          async () => {
+            requests += 1;
+
+            return embeddingResponse();
+          },
+        );
+
+        for (const tokens of [
+          { access_token: "" },
+          { access_token: codexToken({ exp: 4_102_444_800 }), refresh_token: "" },
+          { access_token: "not-a-jwt" },
+          { access_token: codexToken({}) },
+          { access_token: codexToken({ exp: -1 }) },
+        ]) {
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
+          const original = `${JSON.stringify({ auth_mode: "chatgpt", tokens })}\n`;
+          yield* fs.writeFileString(authPath, original);
+
+          const error = yield* Effect.flip(runEmbeddingBatch(provider!, singleEmbeddingRequest));
+
+          expect(error.code).toBe("embedding_authentication_failed");
+          expect(yield* fs.readFileString(authPath)).toBe(original);
+        }
+
+        yield* fs.writeFileString(
+          authPath,
+          `{"auth_mode":"chatgpt","tokens":{"access_token":"${codexToken({ exp: 4_102_444_800.5 })}"}}\n`,
+        );
+        yield* runEmbeddingBatch(provider!, singleEmbeddingRequest);
+
+        expect(requests).toBe(1);
+      }),
+    ),
+  ));
+
+test("invalid Codex refresh credentials leave the auth file unchanged", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { fs, root, authPath } = yield* makeCodexHome;
+        const expired = codexToken({ exp: 0 });
+        const original = `{"auth_mode":"chatgpt","tokens":{"access_token":"${expired}","refresh_token":"secret-refresh"}}\n`;
+
+        for (const response of [
+          { access_token: "" },
+          { access_token: codexToken({ exp: 4_102_444_800 }), refresh_token: "" },
+          { access_token: "not-a-jwt" },
+          { access_token: codexToken({ exp: -1 }) },
+        ]) {
+          yield* fs.writeFileString(authPath, original);
+
+          const provider = configuredEmbeddingProvider(
+            "openai-codex",
+            { CODEX_HOME: root },
+            // @effect-diagnostics-next-line asyncFunction:off
+            async () => Response.json(response),
+          );
+
+          const error = yield* Effect.flip(runEmbeddingBatch(provider!, singleEmbeddingRequest));
+
+          expect(error.code).toBe("embedding_refresh_failed");
+          expect(yield* fs.readFileString(authPath)).toBe(original);
+        }
+      }),
+    ),
+  ));
+
 test("the Codex provider refreshes after 401 without losing auth fields", () =>
   run(
     Effect.scoped(
       Effect.gen(function* () {
         const { fs, root, authPath } = yield* makeCodexHome;
-        const jwt = `header.${Buffer.from('{"exp":4102444800}').toString("base64url")}.signature`;
+        const oldAccess = codexToken({ exp: 4_102_444_800 });
+        const newAccess = codexToken({ exp: 4_102_444_801 });
         const vector = Array.from({ length: 384 }, (_, index) => (index === 0 ? 1 : 0));
         let embeddingCalls = 0;
 
         yield* fs.writeFileString(
           authPath,
-          `{"auth_mode":"chatgpt","tokens":{"access_token":"old-access","refresh_token":"old-refresh","id_token":"${jwt}","account_id":"account","preserve":"token-field"},"last_refresh":"2026-01-01T00:00:00.000Z","preserve":"top-field"}\n`,
+          `{"auth_mode":"chatgpt","tokens":{"access_token":"${oldAccess}","refresh_token":"old-refresh","id_token":"${oldAccess}","account_id":"account","preserve":"token-field"},"last_refresh":"2026-01-01T00:00:00.000Z","preserve":"top-field"}\n`,
         );
 
         // @effect-diagnostics-next-line asyncFunction:off
         const fetcher = async (input: string, init: RequestInit) => {
           if (input === "https://auth.openai.com/oauth/token") {
-            return Response.json({ access_token: "new-access", refresh_token: "new-refresh" });
+            return Response.json({ access_token: newAccess, refresh_token: "new-refresh" });
           }
 
           embeddingCalls += 1;
 
-          if (new Headers(init.headers).get("authorization") === "Bearer old-access") {
+          if (new Headers(init.headers).get("authorization") === `Bearer ${oldAccess}`) {
             return new Response(null, { status: 401 });
           }
 
@@ -223,7 +390,7 @@ test("the Codex provider refreshes after 401 without losing auth fields", () =>
           auth_mode: "chatgpt",
           preserve: "top-field",
           tokens: {
-            access_token: "new-access",
+            access_token: newAccess,
             refresh_token: "new-refresh",
             account_id: "account",
             preserve: "token-field",
@@ -239,7 +406,8 @@ test("concurrent Codex batches share one guarded refresh", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { fs, root, authPath } = yield* makeCodexHome;
-        const jwt = `header.${Buffer.from('{"exp":0}').toString("base64url")}.signature`;
+        const jwt = codexToken({ exp: 0 });
+        const refreshed = codexToken({ exp: 4_102_444_800 });
         const vector = Array.from({ length: 384 }, (_, index) => (index === 0 ? 1 : 0));
         let refreshes = 0;
 
@@ -253,7 +421,7 @@ test("concurrent Codex batches share one guarded refresh", () =>
           if (input === "https://auth.openai.com/oauth/token") {
             refreshes += 1;
 
-            return Bun.sleep(20).then(() => Response.json({ access_token: "new-access" }));
+            return Bun.sleep(20).then(() => Response.json({ access_token: refreshed }));
           }
 
           return Response.json({
@@ -283,7 +451,7 @@ test("Codex lock contention honors the embedding deadline without removing the l
     Effect.scoped(
       Effect.gen(function* () {
         const { fs, root, authPath } = yield* makeCodexHome;
-        const jwt = `header.${Buffer.from('{"exp":0}').toString("base64url")}.signature`;
+        const jwt = codexToken({ exp: 0 });
         const lockPath = `${authPath}.antisprawl.lock`;
         let fetches = 0;
 
@@ -330,7 +498,7 @@ test("non-contention Codex lock failures fail without retrying", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { fs, root, authPath } = yield* makeCodexHome;
-        const jwt = `header.${Buffer.from('{"exp":0}').toString("base64url")}.signature`;
+        const jwt = codexToken({ exp: 0 });
         const lockPath = `${authPath}.antisprawl.lock`;
         let lockWrites = 0;
 
@@ -381,7 +549,8 @@ test("Codex lock cleanup failures become refresh failures", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const { fs, root, authPath } = yield* makeCodexHome;
-        const jwt = `header.${Buffer.from('{"exp":0}').toString("base64url")}.signature`;
+        const jwt = codexToken({ exp: 0 });
+        const refreshed = codexToken({ exp: 4_102_444_800 });
         const lockPath = `${authPath}.antisprawl.lock`;
         const vector = Array.from({ length: 384 }, (_, index) => (index === 0 ? 1 : 0));
         let refreshes = 0;
@@ -396,7 +565,7 @@ test("Codex lock cleanup failures become refresh failures", () =>
           if (input === "https://auth.openai.com/oauth/token") {
             refreshes += 1;
 
-            return Response.json({ access_token: "new-access" });
+            return Response.json({ access_token: refreshed });
           }
 
           return Response.json({
@@ -444,9 +613,11 @@ test("Codex refresh adopts credentials rotated after its replacement is prepared
     Effect.scoped(
       Effect.gen(function* () {
         const { fs, root, authPath } = yield* makeCodexHome;
-        const jwt = `header.${Buffer.from('{"exp":4102444800}').toString("base64url")}.signature`;
-        const initial = `{"auth_mode":"chatgpt","tokens":{"access_token":"old-access","refresh_token":"old-refresh","id_token":"${jwt}"}}\n`;
-        const rotated = `{"auth_mode":"chatgpt","tokens":{"access_token":"codex-access","refresh_token":"codex-refresh","id_token":"${jwt}"},"rotation":"codex"}\n`;
+        const oldAccess = codexToken({ exp: 4_102_444_800 });
+        const codexAccess = codexToken({ exp: 4_102_444_801 });
+        const antisprawlAccess = codexToken({ exp: 4_102_444_802 });
+        const initial = `{"auth_mode":"chatgpt","tokens":{"access_token":"${oldAccess}","refresh_token":"old-refresh","id_token":"${oldAccess}"}}\n`;
+        const rotated = `{"auth_mode":"chatgpt","tokens":{"access_token":"${codexAccess}","refresh_token":"codex-refresh","id_token":"${codexAccess}"},"rotation":"codex"}\n`;
         const vector = Array.from({ length: 384 }, (_, index) => (index === 0 ? 1 : 0));
         const rotatingFileSystem = rotateCodexAuthAfterReplacementPrepared(fs, authPath, rotated);
 
@@ -455,12 +626,12 @@ test("Codex refresh adopts credentials rotated after its replacement is prepared
         // @effect-diagnostics-next-line asyncFunction:off
         const fetcher = async (input: string, init: RequestInit) => {
           if (input === "https://auth.openai.com/oauth/token") {
-            return Response.json({ access_token: "antisprawl-access" });
+            return Response.json({ access_token: antisprawlAccess });
           }
 
           const authorization = new Headers(init.headers).get("authorization");
 
-          return authorization === "Bearer codex-access"
+          return authorization === `Bearer ${codexAccess}`
             ? Response.json({
                 object: "list",
                 data: [{ object: "embedding", index: 0, embedding: vector }],
@@ -486,9 +657,10 @@ test("Codex refresh preserves raced auth when its access token did not change", 
     Effect.scoped(
       Effect.gen(function* () {
         const { fs, root, authPath } = yield* makeCodexHome;
-        const jwt = `header.${Buffer.from('{"exp":4102444800}').toString("base64url")}.signature`;
-        const initial = `{"auth_mode":"chatgpt","tokens":{"access_token":"old-access","refresh_token":"old-refresh","id_token":"${jwt}"}}\n`;
-        const rotated = `{"auth_mode":"chatgpt","tokens":{"access_token":"old-access","refresh_token":"codex-secret","id_token":"${jwt}"},"rotation":"secret-marker"}\n`;
+        const oldAccess = codexToken({ exp: 4_102_444_800 });
+        const antisprawlAccess = codexToken({ exp: 4_102_444_801 });
+        const initial = `{"auth_mode":"chatgpt","tokens":{"access_token":"${oldAccess}","refresh_token":"old-refresh","id_token":"${oldAccess}"}}\n`;
+        const rotated = `{"auth_mode":"chatgpt","tokens":{"access_token":"${oldAccess}","refresh_token":"codex-secret","id_token":"${oldAccess}"},"rotation":"secret-marker"}\n`;
         const rotatingFileSystem = rotateCodexAuthAfterReplacementPrepared(fs, authPath, rotated);
 
         yield* fs.writeFileString(authPath, initial);
@@ -499,7 +671,7 @@ test("Codex refresh preserves raced auth when its access token did not change", 
           // @effect-diagnostics-next-line asyncFunction:off
           async (input) =>
             input === "https://auth.openai.com/oauth/token"
-              ? Response.json({ access_token: "antisprawl-access" })
+              ? Response.json({ access_token: antisprawlAccess })
               : new Response(null, { status: 401 }),
         );
 
@@ -523,7 +695,7 @@ test("failed Codex refresh preserves the auth file and sanitizes the error", () 
     Effect.scoped(
       Effect.gen(function* () {
         const { fs, root, authPath } = yield* makeCodexHome;
-        const jwt = `header.${Buffer.from('{"exp":0}').toString("base64url")}.signature`;
+        const jwt = codexToken({ exp: 0 });
         const original = `{"auth_mode":"chatgpt","tokens":{"access_token":"${jwt}","refresh_token":"secret-refresh","id_token":"${jwt}"},"preserve":"unchanged"}\n`;
 
         yield* fs.writeFileString(authPath, original);

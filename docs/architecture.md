@@ -283,7 +283,7 @@ Structural results are reproducible from pinned inputs. Remote providers may cha
 
 V1 targets explicit Structural-only operation, OpenAI API-key embeddings, an experimental `openai-codex` adapter, and later generic OpenAI-compatible endpoints. There is no implicit provider or authentication fallback.
 
-Issue #18 adds two fixed providers behind the same internal seam. Both use Bun's built-in `fetch`, explicit batches of two, a 30-second deadline, ordered response validation, and aggregate usage/latency reporting against `https://api.openai.com/v1/embeddings`. They do not retry transport failures, rate limits, or server errors.
+Issue #18 adds two fixed providers behind the same internal seam. Both use Bun's built-in `fetch`, explicit batches of two, a 30-second deadline, non-negative integer response indices and usage, ordered response validation, and aggregate usage/latency reporting against `https://api.openai.com/v1/embeddings`. They do not retry transport failures, rate limits, or server errors.
 
 ### OpenAI API-key adapter
 
@@ -294,7 +294,8 @@ Issue #18 adds two fixed providers behind the same internal seam. Both use Bun's
 `openai-codex` uses the user's existing file-backed Codex login:
 
 - resolve `$CODEX_HOME/auth.json`, using `~/.codex/auth.json` only when `CODEX_HOME` is unset or empty;
-- require file-backed ChatGPT/Codex authentication;
+- require file-backed ChatGPT/Codex authentication with non-empty access and supplied refresh tokens;
+- require a standard three-part access-token JWT with a finite, non-negative expiry, without locally verifying its signature;
 - send the access token as a bearer token to the embeddings endpoint;
 - use JWT expiry only to schedule refresh within five minutes of expiry;
 - lock and re-read the auth file before refresh, prepare the replacement, then compare the exact on-disk bytes immediately before persistence;

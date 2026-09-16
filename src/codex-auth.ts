@@ -8,6 +8,8 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as SchemaParser from "effect/SchemaParser";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 import { appError, type AppError } from "./errors.ts";
 
 export type HttpFetch = (input: string, init: RequestInit) => Promise<Response>;
@@ -18,9 +20,38 @@ const Json = Schema.fromJsonString(Schema.Unknown);
 
 const UnknownRecord = Schema.Record(Schema.String, Schema.Unknown);
 
+const JwtExpiry = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
+
+const JwtPayload = Schema.Struct({ exp: JwtExpiry });
+
+const JwtSegment = Schema.NonEmptyString.check(Schema.isBase64Url());
+
+const ParsedJwt = Schema.TemplateLiteralParser([
+  JwtSegment,
+  ".",
+  Schema.StringFromBase64Url.pipe(Schema.decodeTo(Schema.fromJsonString(JwtPayload))),
+  ".",
+  JwtSegment,
+]);
+
+const DecodedAccessToken = Schema.Struct({ raw: Schema.String, expiry: JwtExpiry });
+
+const AccessToken = Schema.String.pipe(
+  Schema.decodeTo(
+    DecodedAccessToken,
+    SchemaTransformation.transformEffect({
+      decode: (raw) =>
+        SchemaParser.decodeUnknownEffect(ParsedJwt)(raw).pipe(
+          Effect.map((parsed) => ({ raw, expiry: parsed[2].exp })),
+        ),
+      encode: ({ raw }) => Effect.succeed(raw),
+    }),
+  ),
+);
+
 const AuthTokens = Schema.Struct({
-  access_token: Schema.String,
-  refresh_token: Schema.optionalKey(Schema.String),
+  access_token: AccessToken,
+  refresh_token: Schema.optionalKey(Schema.NonEmptyString),
   id_token: Schema.optionalKey(Schema.String),
   account_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
@@ -32,18 +63,17 @@ const AuthFile = Schema.Struct({
 });
 
 const RefreshResponse = Schema.Struct({
-  access_token: Schema.String,
-  refresh_token: Schema.optionalKey(Schema.String),
+  access_token: AccessToken,
+  refresh_token: Schema.optionalKey(Schema.NonEmptyString),
   id_token: Schema.optionalKey(Schema.String),
 });
-
-const JwtPayload = Schema.Struct({ exp: Schema.Finite });
 
 interface DecodedAuth {
   readonly text: string;
   readonly raw: typeof UnknownRecord.Type;
   readonly rawTokens: typeof UnknownRecord.Type;
   readonly accessToken: string;
+  readonly accessTokenExpiry: number;
   readonly refreshToken?: string;
 }
 
@@ -81,13 +111,12 @@ const decodeAuth = Effect.fn("CodexAuth.decode")(function* (text: string, error:
     Effect.mapError(() => error),
   );
 
-  if (decoded.tokens.access_token.length === 0) return yield* error;
-
   return {
     text,
     raw,
     rawTokens,
-    accessToken: decoded.tokens.access_token,
+    accessToken: decoded.tokens.access_token.raw,
+    accessTokenExpiry: decoded.tokens.access_token.expiry,
     refreshToken: decoded.tokens.refresh_token,
   } satisfies DecodedAuth;
 });
@@ -98,20 +127,6 @@ const readAuth = Effect.fn("CodexAuth.read")(function* (path: string, error: App
 
   return yield* decodeAuth(text, error);
 });
-
-const jwtExpiry = (token: string): number | undefined => {
-  try {
-    const payload = JSON.parse(
-      Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8"),
-    );
-
-    const decoded = Schema.decodeUnknownOption(JwtPayload)(payload);
-
-    return Option.isSome(decoded) ? decoded.value.exp : undefined;
-  } catch {
-    return undefined;
-  }
-};
 
 const acquireLock = Effect.fn("CodexAuth.acquireLock")(function* (path: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -150,7 +165,7 @@ const encodeAuth = Effect.fn("CodexAuth.encode")(function* (
 
   const tokens = {
     ...auth.rawTokens,
-    access_token: response.access_token,
+    access_token: response.access_token.raw,
     refresh_token: response.refresh_token ?? auth.refreshToken,
     id_token: idToken,
   };
@@ -204,9 +219,7 @@ const refreshAccessToken = Effect.fn("CodexAuth.refresh")(function* (
 
         if (auth.accessToken !== expectedAccessToken) return auth.accessToken;
 
-        if (auth.refreshToken === undefined || auth.refreshToken.length === 0) {
-          return yield* refreshFailure();
-        }
+        if (auth.refreshToken === undefined) return yield* refreshFailure();
 
         const requestBody = yield* Schema.encodeEffect(Json)({
           client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
@@ -240,8 +253,6 @@ const refreshAccessToken = Effect.fn("CodexAuth.refresh")(function* (
           Effect.mapError(() => refreshFailure()),
         );
 
-        if (refreshed.access_token.length === 0) return yield* refreshFailure();
-
         const externalAccessToken = yield* replaceAuth(
           path,
           auth,
@@ -250,7 +261,7 @@ const refreshAccessToken = Effect.fn("CodexAuth.refresh")(function* (
 
         if (externalAccessToken === auth.accessToken) return yield* refreshFailure();
 
-        return externalAccessToken ?? refreshed.access_token;
+        return externalAccessToken ?? refreshed.access_token.raw;
       }),
     () => releaseLock(lockPath),
   );
@@ -262,10 +273,9 @@ export const codexAccessToken = Effect.fn("CodexAuth.accessToken")(function* (
 ) {
   const path = yield* resolveAuthPath(environment);
   const auth = yield* readAuth(path, authFailure());
-  const expiry = jwtExpiry(auth.accessToken);
   const now = yield* Clock.currentTimeMillis;
 
-  return expiry !== undefined && expiry <= now / 1000 + 5 * 60
+  return auth.accessTokenExpiry <= now / 1000 + 5 * 60
     ? yield* refreshAccessToken(path, auth.accessToken, fetcher)
     : auth.accessToken;
 });
