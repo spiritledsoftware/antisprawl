@@ -26,6 +26,7 @@ import {
   embeddingIdentityHash,
   indexSchemaVersion,
   persistEmbeddingBatch,
+  profileMatches,
   readIndex,
   readIndexForBaseline,
   replaceIndex,
@@ -113,6 +114,20 @@ interface CommandOutput {
   readonly findings: ReadonlyArray<Finding>;
 }
 
+interface DryRunOutput {
+  readonly protocolVersion: 1;
+  readonly command: "index";
+  readonly dryRun: true;
+  readonly profile?: ProfileProvenance;
+  readonly preview: {
+    readonly files: number;
+    readonly eligibleSymbols: number;
+    readonly inputBytes: number;
+    readonly vectors: { readonly required: number; readonly reused: number };
+  };
+  readonly diagnostics: ReadonlyArray<Diagnostic>;
+}
+
 interface Context {
   readonly project: Project;
   readonly grammar: ResolvedGrammar;
@@ -145,7 +160,7 @@ const loadContext = Effect.fn("App.loadContext")(function* (startingDirectory: s
       detectorVersion,
       structuralPolicyVersion: structuralPolicy.version,
     },
-    provider: configuredEmbeddingProvider(),
+    provider: configuredEmbeddingProvider(project.embedding?.provider),
   } satisfies Context;
 });
 
@@ -170,11 +185,65 @@ const provenance = (context: Context): Provenance => ({
   profile: context.provider === undefined ? undefined : profileProvenance(context.provider.profile),
 });
 
+export const dryRunIndex = Effect.fn("App.dryRunIndex")(function* (startingDirectory: string) {
+  const context = yield* loadContext(startingDirectory);
+  const baseline = yield* readIndexForBaseline(context.indexPath, context.identity);
+  const sourcePaths = yield* discoverSourcePaths(context.project);
+  const diagnostics: Array<Diagnostic> = [...context.project.diagnostics];
+  const representations: Array<StructuralRepresentation> = [];
+
+  for (const path of sourcePaths) {
+    const source = yield* sourceText(context.project.root, path);
+    const file = yield* representFile(context, path, source, sha256(source));
+
+    representations.push(...file.symbols);
+    addDegradedDiagnostic(file.parseStatus, path, diagnostics);
+  }
+
+  const eligible = representations.filter(
+    (symbol) =>
+      symbol.tokenCount >= structuralPolicy.minimumTokens && symbol.embeddingInput !== undefined,
+  );
+
+  const inputByHash = new Map(
+    eligible.map((symbol) => [symbol.embeddingHash, symbol.embeddingInput!] as const),
+  );
+
+  const identityMatches =
+    context.provider !== undefined && embeddingIdentityMatches(baseline.snapshot, context.provider);
+
+  let reused = 0;
+  let inputBytes = 0;
+
+  for (const [hash, input] of inputByHash) {
+    if (identityMatches && baseline.snapshot.vectors.has(hash)) reused += 1;
+    else inputBytes += new TextEncoder().encode(input).byteLength;
+  }
+
+  return {
+    protocolVersion: 1,
+    command: "index",
+    dryRun: true,
+    profile:
+      context.provider === undefined ? undefined : profileProvenance(context.provider.profile),
+    preview: {
+      files: sourcePaths.length,
+      eligibleSymbols: eligible.length,
+      inputBytes,
+      vectors: { required: inputByHash.size - reused, reused },
+    },
+    diagnostics,
+  } satisfies DryRunOutput;
+});
+
 const asIndexed = (path: string, symbol: StructuralRepresentation): IndexedSymbol => ({
   path,
   language: "typescript",
   ...symbol,
 });
+
+const completedProfileMatches = (active: IndexSnapshot["profile"], profile: Profile) =>
+  active !== undefined && active.complete && profileMatches(active, profile);
 
 const coverageFor = (
   currentPaths: ReadonlyArray<string>,
@@ -211,9 +280,7 @@ const coverageFor = (
   const failed = parseFailures + missingVectors;
 
   const profileIncomplete =
-    profile !== undefined &&
-    (snapshot.profile?.identityHash !== embeddingIdentityHash(profile) ||
-      snapshot.profile?.complete !== true);
+    profile !== undefined && !completedProfileMatches(snapshot.profile, profile);
 
   return {
     status:
@@ -233,6 +300,22 @@ const sourceText = Effect.fn("App.readSource")(function* (root: string, sourcePa
   return yield* fs
     .readFileString(paths.join(root, sourcePath))
     .pipe(Effect.mapError(() => appError("source_unreadable", `Cannot read ${sourcePath}.`)));
+});
+
+const ensureSourcesUnchanged = Effect.fn("App.ensureSourcesUnchanged")(function* (
+  root: string,
+  files: ReadonlyArray<CurrentFile>,
+) {
+  for (const file of files) {
+    const source = yield* sourceText(root, file.path);
+
+    if (sha256(source) !== file.contentHash) {
+      return yield* appError(
+        "source_changed_during_index",
+        `${file.path} changed during indexing.`,
+      );
+    }
+  }
 });
 
 const representFile = Effect.fn("App.representFile")(function* (
@@ -287,7 +370,9 @@ const writeBatchTrace = Effect.fn("App.writeBatchTrace")(function* (
     );
 
   if (Bun.env.ANTISPRAW_ACCEPTANCE_PAUSE_AFTER_BATCH === String(batch)) {
-    yield* Effect.sleep("1 minute");
+    const pauseMs = Number(Bun.env.ANTISPRAW_ACCEPTANCE_PAUSE_AFTER_BATCH_MS ?? 60_000);
+
+    yield* Effect.sleep(Number.isFinite(pauseMs) && pauseMs >= 0 ? pauseMs : 60_000);
   }
 });
 
@@ -484,16 +569,7 @@ export const indexProject = Effect.fn("App.indexProject")(function* (startingDir
     addDegradedDiagnostic(replacement.parseStatus, sourcePath, diagnostics);
   }
 
-  for (const current of currentFiles) {
-    const source = yield* sourceText(context.project.root, current.path);
-
-    if (sha256(source) !== current.contentHash) {
-      return yield* appError(
-        "source_changed_during_index",
-        `${current.path} changed during indexing.`,
-      );
-    }
-  }
+  yield* ensureSourcesUnchanged(context.project.root, currentFiles);
 
   const replacements = [...replacementByPath.values()];
 
@@ -512,6 +588,7 @@ export const indexProject = Effect.fn("App.indexProject")(function* (startingDir
       structural.symbols,
       replacements,
     );
+    yield* ensureSourcesUnchanged(context.project.root, currentFiles);
     embeddingWork = yield* completeEmbedding(context, context.provider, embeddingWork);
   }
 
@@ -613,11 +690,6 @@ export const checkProject = Effect.fn("App.checkProject")(function* (
   const replacementByPath = new Map<string, FileRecord>();
   const diagnostics: Array<Diagnostic> = [...context.project.diagnostics];
 
-  const repairAll =
-    !named &&
-    context.provider !== undefined &&
-    (!embeddingIdentityMatches(previous, context.provider) || !previous.profile?.complete);
-
   for (const requestedPath of requested) {
     if (!requestedPath.exists) continue;
 
@@ -625,7 +697,7 @@ export const checkProject = Effect.fn("App.checkProject")(function* (
     const contentHash = sha256(source);
     const prior = previous.files.get(requestedPath.path);
 
-    if (!repairAll && prior?.contentHash === contentHash && prior.parseStatus !== "stale") {
+    if (prior?.contentHash === contentHash && prior.parseStatus !== "stale") {
       addDegradedDiagnostic(prior.parseStatus, requestedPath.path, diagnostics);
       continue;
     }
@@ -647,12 +719,14 @@ export const checkProject = Effect.fn("App.checkProject")(function* (
 
   const canEmbed =
     context.provider !== undefined &&
-    (!named ||
-      (embeddingIdentityMatches(previous, context.provider) &&
-        previous.profile?.complete === true));
+    completedProfileMatches(previous.profile, context.provider.profile);
 
   if (context.provider !== undefined && !canEmbed) {
-    diagnostics.push({ severity: "warning", code: "semantic_index_partial" });
+    diagnostics.push({
+      severity: "warning",
+      code: "semantic_index_partial",
+      message: "Run antisprawl index.",
+    });
   }
 
   if (context.provider !== undefined && canEmbed) {
@@ -718,8 +792,7 @@ export const checkProject = Effect.fn("App.checkProject")(function* (
   const semantic =
     context.provider !== undefined &&
     embeddingError === undefined &&
-    embeddingIdentityMatches(current, context.provider) &&
-    current.profile?.complete === true;
+    completedProfileMatches(current.profile, context.provider.profile);
 
   const search = semantic ? yield* nativeSearch(context, current, edited) : undefined;
 

@@ -11,6 +11,12 @@ const configNames = [
   ".antisprawl.json",
 ] as const;
 
+const EmbeddingConfig = Schema.Struct({
+  provider: Schema.Literals(["openai", "openai-codex"]),
+});
+
+export type EmbeddingConfig = typeof EmbeddingConfig.Type;
+
 const ConfigSchema = Schema.Struct({
   version: Schema.optionalKey(Schema.Int),
   sources: Schema.Struct({
@@ -27,6 +33,7 @@ export interface Diagnostic {
   readonly severity: "warning";
   readonly code: string;
   readonly path?: string;
+  readonly message?: string;
 }
 
 export interface Project {
@@ -34,6 +41,7 @@ export interface Project {
   readonly configHash: string;
   readonly include: ReadonlyArray<string>;
   readonly exclude: ReadonlyArray<string>;
+  readonly embedding?: EmbeddingConfig;
   readonly diagnostics: ReadonlyArray<Diagnostic>;
 }
 
@@ -82,12 +90,14 @@ export const resolveProject = Effect.fn("Project.resolve")(function* (startingDi
         );
       }
 
-      if (decoded.embedding !== undefined) {
-        return yield* appError(
-          "embedding_not_supported",
-          "This increment supports Structural-only configuration.",
-        );
-      }
+      const embedding =
+        decoded.embedding === undefined
+          ? undefined
+          : yield* Schema.decodeUnknownEffect(EmbeddingConfig, {
+              onExcessProperty: "error",
+            })(decoded.embedding).pipe(
+              Effect.mapError(() => appError("config_invalid", `${selected} is invalid.`)),
+            );
 
       if (decoded.detection !== undefined) {
         return yield* appError(
@@ -134,6 +144,7 @@ export const resolveProject = Effect.fn("Project.resolve")(function* (startingDi
         configHash: sha256(text),
         include: decoded.sources.include,
         exclude: decoded.sources.exclude ?? [],
+        embedding,
         diagnostics,
       } satisfies Project;
     }

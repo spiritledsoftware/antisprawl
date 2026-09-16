@@ -1,7 +1,17 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import {
+  codexAccessToken,
+  refreshCodexAccessToken,
+  type CodexAuthServices,
+  type HttpFetch,
+} from "./codex-auth.ts";
 import { AppError, appError } from "./errors.ts";
 import { embeddingRepresentationVersion } from "./representation.ts";
+
+declare global {
+  var ANTISPRAW_LIVE_PROFILE_MATRIX: boolean | undefined;
+}
 
 export const semanticThreshold = 0.85;
 
@@ -55,7 +65,9 @@ const ProviderResponse = Schema.Struct({
 export interface EmbeddingProvider {
   readonly profile: Profile;
   readonly deadlineMs: number;
-  readonly embed: (inputs: ReadonlyArray<EmbeddingRequest>) => Effect.Effect<unknown, AppError>;
+  readonly embed: (
+    inputs: ReadonlyArray<EmbeddingRequest>,
+  ) => Effect.Effect<unknown, AppError, CodexAuthServices>;
 }
 
 export interface EmbeddedBatch {
@@ -76,6 +88,107 @@ export const embeddingIdentityHash = (identity: EmbeddingIdentity): string =>
     "hex",
   );
 
+const OpenAIResponse = Schema.Struct({
+  object: Schema.Literal("list"),
+  data: Schema.Array(
+    Schema.Struct({
+      object: Schema.Literal("embedding"),
+      index: Schema.Int,
+      // Decoded here so runEmbeddingBatch retains the typed non-finite-vector failure.
+      // @effect-diagnostics-next-line schemaNumber:off
+      embedding: Schema.Array(Schema.Number),
+    }),
+  ),
+  model: Schema.String,
+  usage: Schema.Struct({ prompt_tokens: Schema.Finite, total_tokens: Schema.Finite }),
+});
+
+const openAIEmbed = Effect.fn("Embedding.openAIEmbed")(function* (
+  profile: Profile,
+  accessToken: string,
+  inputs: ReadonlyArray<EmbeddingRequest>,
+  fetcher: HttpFetch,
+  refresh?: (rejectedAccessToken: string) => Effect.Effect<string, AppError, CodexAuthServices>,
+) {
+  const started = performance.now();
+
+  // @effect-diagnostics-next-line preferSchemaOverJson:off
+  const requestBody = JSON.stringify({
+    input: inputs.map(({ input }) => input),
+    model: profile.model,
+    dimensions: profile.dimensions,
+    encoding_format: "float",
+  });
+
+  const send = (token: string) =>
+    Effect.tryPromise({
+      try: (signal) =>
+        fetcher("https://api.openai.com/v1/embeddings", {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+          },
+          body: requestBody,
+          signal,
+        }),
+      catch: () =>
+        appError("embedding_transport_failed", "The embedding provider could not be reached."),
+    });
+
+  let response = yield* send(accessToken);
+
+  if (response.status === 401 && refresh !== undefined) {
+    response = yield* send(yield* refresh(accessToken));
+  }
+
+  if (response.status === 401) {
+    return yield* appError("embedding_authentication_failed", "Embedding authentication failed.");
+  }
+
+  if (!response.ok) {
+    return yield* appError(
+      "embedding_transport_failed",
+      "The embedding provider rejected the request.",
+    );
+  }
+
+  const body = yield* Effect.tryPromise({
+    try: () => response.json(),
+    catch: () =>
+      appError("embedding_response_invalid", "The embedding provider returned invalid data."),
+  });
+
+  const decoded = yield* Schema.decodeUnknownEffect(OpenAIResponse)(body).pipe(
+    Effect.mapError(() =>
+      appError("embedding_response_invalid", "The embedding provider returned invalid data."),
+    ),
+  );
+
+  if (
+    decoded.model !== profile.model ||
+    decoded.usage.prompt_tokens < 0 ||
+    decoded.usage.total_tokens < decoded.usage.prompt_tokens
+  ) {
+    return yield* appError(
+      "embedding_response_invalid",
+      "The embedding provider returned invalid data.",
+    );
+  }
+
+  return {
+    vectors: decoded.data.map((item) => ({
+      index: inputs[item.index]?.index ?? item.index,
+      hash: inputs[item.index]?.hash ?? "",
+      vector: item.embedding,
+    })),
+    usage: {
+      inputTokens: decoded.usage.prompt_tokens,
+      durationMs: Math.max(0, Math.round(performance.now() - started)),
+    },
+  };
+});
+
 const deterministicProfile: Profile = {
   provider: "deterministic",
   model: "acceptance-v1",
@@ -91,9 +204,51 @@ const deterministicVector = (input: string): ReadonlyArray<number> =>
   /\b(?:Invoice|invoice|dueAt|paidAt)\b/.test(input) ? [0, 1] : [1, 0];
 
 export const configuredEmbeddingProvider = (
+  configured?: "openai" | "openai-codex",
   environment: Readonly<Record<string, string | undefined>> = Bun.env,
+  fetcher: HttpFetch = globalThis.fetch,
 ): EmbeddingProvider | undefined => {
-  if (environment.ANTISPRAW_ACCEPTANCE_EMBEDDINGS !== "deterministic-v1") return undefined;
+  if (environment.ANTISPRAW_ACCEPTANCE_EMBEDDINGS !== "deterministic-v1") {
+    if (configured === undefined) return undefined;
+
+    const acceptanceDimensions =
+      globalThis.ANTISPRAW_LIVE_PROFILE_MATRIX === true
+        ? Number(environment.ANTISPRAW_ACCEPTANCE_OPENAI_DIMENSIONS)
+        : 384;
+
+    const profile: Profile = {
+      provider: configured,
+      model: "text-embedding-3-small",
+      dimensions: acceptanceDimensions === 1536 ? 1536 : 384,
+      language: "typescript",
+      representation: embeddingRepresentationVersion,
+      detector: 2,
+      semanticThreshold,
+      calibration: "calibrated",
+    };
+
+    const embedRemote: EmbeddingProvider["embed"] = (inputs) => {
+      if (configured === "openai-codex") {
+        return codexAccessToken(environment, fetcher).pipe(
+          Effect.flatMap((accessToken) =>
+            openAIEmbed(profile, accessToken, inputs, fetcher, (rejectedAccessToken) =>
+              refreshCodexAccessToken(environment, rejectedAccessToken, fetcher),
+            ),
+          ),
+        );
+      }
+
+      const accessToken = environment.OPENAI_API_KEY;
+
+      return accessToken === undefined || accessToken.length === 0
+        ? Effect.fail(
+            appError("embedding_authentication_failed", "Embedding authentication failed."),
+          )
+        : openAIEmbed(profile, accessToken, inputs, fetcher);
+    };
+
+    return { profile, deadlineMs: 30_000, embed: embedRemote };
+  }
 
   const profile = {
     ...deterministicProfile,
@@ -105,66 +260,68 @@ export const configuredEmbeddingProvider = (
   const deadlineMs = Number(environment.ANTISPRAW_ACCEPTANCE_EMBEDDING_DEADLINE_MS ?? 30_000);
   let calls = 0;
 
+  const embedDeterministic: EmbeddingProvider["embed"] = (inputs) => {
+    calls += 1;
+
+    const failure = calls === failureBatch ? configuredFailure : undefined;
+
+    if (failure === "auth") {
+      return Effect.fail(
+        appError("embedding_authentication_failed", "Embedding authentication failed."),
+      );
+    }
+
+    if (failure === "transport") {
+      return Effect.fail(
+        appError("embedding_transport_failed", "The embedding provider could not be reached."),
+      );
+    }
+
+    if (failure === "timeout") {
+      return Effect.sleep("1 minute").pipe(
+        Effect.as({ vectors: [], usage: { inputTokens: 0, durationMs: 0 } }),
+      );
+    }
+
+    let vectors: ReadonlyArray<ProviderVector> = inputs.map((input) => ({
+      index: input.index,
+      hash: input.hash,
+      vector: deterministicVector(input.input),
+    }));
+
+    if (failure === "wrong_count") vectors = vectors.slice(0, -1);
+
+    if (failure === "wrong_order") vectors = [...vectors].reverse();
+
+    if (failure === "wrong_index" && vectors[0] !== undefined) {
+      vectors = [{ ...vectors[0], index: vectors[0].index + 1 }, ...vectors.slice(1)];
+    }
+
+    if (failure === "dimensions" && vectors[0] !== undefined) {
+      vectors = [{ ...vectors[0], vector: [1] }, ...vectors.slice(1)];
+    }
+
+    if (failure === "nonfinite" && vectors[0] !== undefined) {
+      vectors = [{ ...vectors[0], vector: [Number.NaN, 0] }, ...vectors.slice(1)];
+    }
+
+    if (failure === "zero" && vectors[0] !== undefined) {
+      vectors = [{ ...vectors[0], vector: [0, 0] }, ...vectors.slice(1)];
+    }
+
+    return Effect.succeed({
+      vectors,
+      usage: {
+        inputTokens: inputs.reduce((total, input) => total + input.input.split(/\s+/).length, 0),
+        durationMs: inputs.length,
+      },
+    });
+  };
+
   return {
     profile,
     deadlineMs: Number.isFinite(deadlineMs) && deadlineMs > 0 ? deadlineMs : 30_000,
-    embed: (inputs) => {
-      calls += 1;
-
-      const failure = calls === failureBatch ? configuredFailure : undefined;
-
-      if (failure === "auth") {
-        return Effect.fail(
-          appError("embedding_authentication_failed", "Embedding authentication failed."),
-        );
-      }
-
-      if (failure === "transport") {
-        return Effect.fail(
-          appError("embedding_transport_failed", "The embedding provider could not be reached."),
-        );
-      }
-
-      if (failure === "timeout") {
-        return Effect.sleep("1 minute").pipe(
-          Effect.as({ vectors: [], usage: { inputTokens: 0, durationMs: 0 } }),
-        );
-      }
-
-      let vectors: ReadonlyArray<ProviderVector> = inputs.map((input) => ({
-        index: input.index,
-        hash: input.hash,
-        vector: deterministicVector(input.input),
-      }));
-
-      if (failure === "wrong_count") vectors = vectors.slice(0, -1);
-
-      if (failure === "wrong_order") vectors = [...vectors].reverse();
-
-      if (failure === "wrong_index" && vectors[0] !== undefined) {
-        vectors = [{ ...vectors[0], index: vectors[0].index + 1 }, ...vectors.slice(1)];
-      }
-
-      if (failure === "dimensions" && vectors[0] !== undefined) {
-        vectors = [{ ...vectors[0], vector: [1] }, ...vectors.slice(1)];
-      }
-
-      if (failure === "nonfinite" && vectors[0] !== undefined) {
-        vectors = [{ ...vectors[0], vector: [Number.NaN, 0] }, ...vectors.slice(1)];
-      }
-
-      if (failure === "zero" && vectors[0] !== undefined) {
-        vectors = [{ ...vectors[0], vector: [0, 0] }, ...vectors.slice(1)];
-      }
-
-      return Effect.succeed({
-        vectors,
-        usage: {
-          inputTokens: inputs.reduce((total, input) => total + input.input.split(/\s+/).length, 0),
-          durationMs: inputs.length,
-        },
-      });
-    },
+    embed: embedDeterministic,
   };
 };
 

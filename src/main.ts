@@ -6,7 +6,8 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Argument from "effect/unstable/cli/Argument";
 import * as Command from "effect/unstable/cli/Command";
-import { checkProject, indexProject } from "./app.ts";
+import * as Flag from "effect/unstable/cli/Flag";
+import { checkProject, dryRunIndex, indexProject } from "./app.ts";
 import { AppError, appError } from "./errors.ts";
 
 const expectedBunVersion = packageJson.devEngines.packageManager.version;
@@ -20,12 +21,16 @@ const requireBunVersion =
       );
 
 const emitOutput = (output: {
-  readonly diagnostics: ReadonlyArray<{ readonly code: string; readonly path?: string }>;
+  readonly diagnostics: ReadonlyArray<{
+    readonly code: string;
+    readonly path?: string;
+    readonly message?: string;
+  }>;
 }) =>
   Effect.gen(function* () {
     for (const diagnostic of output.diagnostics) {
       yield* Console.error(
-        `warning[${diagnostic.code}]${diagnostic.path === undefined ? "" : `: ${diagnostic.path}`}`,
+        `warning[${diagnostic.code}]${diagnostic.path === undefined ? "" : `: ${diagnostic.path}`}${diagnostic.message === undefined ? "" : `: ${diagnostic.message}`}`,
       );
     }
 
@@ -34,11 +39,14 @@ const emitOutput = (output: {
     yield* Console.log(json);
   });
 
-const index = Command.make("index", {}, () =>
-  Effect.gen(function* () {
-    yield* requireBunVersion;
-    yield* emitOutput(yield* indexProject(process.cwd()));
-  }),
+const index = Command.make(
+  "index",
+  { dryRun: Flag.Boolean("dry-run").pipe(Flag.withDefault(false)) },
+  ({ dryRun }) =>
+    Effect.gen(function* () {
+      yield* requireBunVersion;
+      yield* emitOutput(yield* dryRun ? dryRunIndex(process.cwd()) : indexProject(process.cwd()));
+    }),
 );
 
 const check = Command.make(
@@ -67,7 +75,9 @@ const flags = separator === -1 ? rest : rest.slice(0, separator);
 
 const invocationIsValid =
   (commandArguments.length === 1 && command !== undefined && helpFlags.has(command)) ||
-  (command === "index" && (rest.length === 0 || (rest.length === 1 && helpFlags.has(rest[0]!)))) ||
+  (command === "index" &&
+    (rest.length === 0 ||
+      (rest.length === 1 && (helpFlags.has(rest[0]!) || rest[0] === "--dry-run")))) ||
   (command === "check" &&
     (rest.length === 0 ||
       (rest.length === 1 && helpFlags.has(rest[0]!)) ||

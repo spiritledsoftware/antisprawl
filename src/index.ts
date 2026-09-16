@@ -173,13 +173,17 @@ type NameRow = (typeof NameRows.Type)[number];
 
 type MetadataRow = (typeof MetadataRows.Type)[number];
 
+type ColumnRow = (typeof ColumnRows.Type)[number];
+
+type IntegrityRow = (typeof IntegrityRows.Type)[number];
+
 type CountRow = (typeof CountRows.Type)[number];
 
 type PresentRow = (typeof PresentRows.Type)[number];
 
 const emptySnapshot = (): IndexSnapshot => ({ files: new Map(), symbols: [], vectors: new Map() });
 
-const profileEquals = (left: ActiveProfile, right: Profile) =>
+export const profileMatches = (left: ActiveProfile, right: Profile) =>
   left.identityHash === embeddingIdentityHash(right) &&
   left.detector === right.detector &&
   left.semanticThreshold === right.semanticThreshold &&
@@ -283,7 +287,7 @@ const readValidatedIndex = Effect.fn("Index.readValidated")(function* (
       return yield* appError("index_incompatible", "The existing Index schema is incompatible.");
     }
 
-    const columnRows = yield* sql<{ table_name: string; columns: string }>`
+    const columnRows = yield* sql<ColumnRow>`
       SELECT 'files' AS table_name, group_concat(name, ',') AS columns
       FROM pragma_table_info('files')
       UNION ALL
@@ -336,7 +340,7 @@ const readValidatedIndex = Effect.fn("Index.readValidated")(function* (
       );
     }
 
-    const integrityRows = yield* sql<{ invalid: number }>`
+    const integrityRows = yield* sql<IntegrityRow>`
       SELECT CASE WHEN
         EXISTS (
           SELECT 1 FROM files
@@ -878,7 +882,7 @@ export const persistEmbeddingBatch = Effect.fn("Index.persistEmbeddingBatch")(fu
       Effect.gen(function* () {
         const active = yield* readProfile();
 
-        if (active === undefined || !profileEquals(active, profile)) {
+        if (active === undefined || !profileMatches(active, profile)) {
           return yield* appError(
             "embedding_profile_changed",
             "The active Profile changed during indexing.",
@@ -939,7 +943,7 @@ export const completeProfile = Effect.fn("Index.completeProfile")(function* (
       Effect.gen(function* () {
         const active = yield* readProfile();
 
-        if (active === undefined || !profileEquals(active, profile)) {
+        if (active === undefined || !profileMatches(active, profile)) {
           return yield* appError(
             "embedding_profile_changed",
             "The active Profile changed during indexing.",

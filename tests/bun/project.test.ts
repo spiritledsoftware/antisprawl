@@ -62,6 +62,44 @@ test("the nearest Project uses same-directory config precedence", () =>
     ),
   ));
 
+test("Project configuration selects a fixed OpenAI provider", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const paths = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-project-" });
+
+        yield* fs.writeFileString(
+          paths.join(root, ".antisprawl.json"),
+          '{"version":1,"sources":{"include":["src/**/*.ts"]},"embedding":{"provider":"openai"}}',
+        );
+
+        expect(yield* resolveProject(root)).toMatchObject({
+          embedding: { provider: "openai" },
+        });
+      }),
+    ),
+  ));
+
+test("Project configuration rejects OpenAI provider knobs", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const paths = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "antisprawl-project-" });
+
+        yield* fs.writeFileString(
+          paths.join(root, ".antisprawl.json"),
+          '{"version":1,"sources":{"include":["src/**/*.ts"]},"embedding":{"provider":"openai","dimensions":1536}}',
+        );
+
+        expect(yield* Effect.flip(resolveProject(root))).toMatchObject({ code: "config_invalid" });
+      }),
+    ),
+  ));
+
 test("source discovery includes TypeScript and declaration extensions only", () =>
   run(
     Effect.scoped(

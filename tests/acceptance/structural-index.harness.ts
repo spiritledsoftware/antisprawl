@@ -25,6 +25,7 @@ const CheckOutput = Schema.fromJsonString(
         severity: Schema.String,
         code: Schema.String,
         path: Schema.optionalKey(Schema.String),
+        message: Schema.optionalKey(Schema.String),
       }),
     ),
     findings: Schema.Array(
@@ -99,6 +100,86 @@ const checkOutput = (
 
   return Schema.decodeEffect(CheckOutput)(result.stdout);
 };
+
+export const verifyProviderDryRun = Effect.fn("Acceptance.verifyProviderDryRun")(function* (
+  runCommand: CommandRunner,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const paths = yield* Path.Path;
+
+  for (const provider of ["openai", "openai-codex"] as const) {
+    const projectRoot = yield* createProject("antisprawl-provider-dry-run-", {
+      [structuralCheckScenario.configPath]: `{
+  "version": 1,
+  "embedding": { "provider": "${provider}" },
+  "sources": { "include": ["src/**/*.ts"] }
+}\n`,
+      ...structuralCheckScenario.baseline,
+    });
+
+    const result = runCommand(projectRoot, ["index", "--dry-run"], {
+      CODEX_HOME: paths.join(projectRoot, "missing-codex-home"),
+      OPENAI_API_KEY: "",
+    });
+
+    expect({ exitCode: result.exitCode, stderr: result.stderr }, provider).toEqual({
+      exitCode: 0,
+      stderr: "",
+    });
+    expect(yield* Schema.decodeEffect(Json)(result.stdout), provider).toMatchObject({
+      protocolVersion: 1,
+      command: "index",
+      dryRun: true,
+      profile: {
+        provider,
+        model: "text-embedding-3-small",
+        dimensions: 384,
+        semanticThreshold: 0.85,
+        calibration: "calibrated",
+      },
+      preview: {
+        files: 1,
+        eligibleSymbols: 1,
+        vectors: { required: 1, reused: 0 },
+      },
+      diagnostics: [],
+    });
+    expect(yield* fs.exists(paths.join(projectRoot, ".antisprawl/index.sqlite")), provider).toBe(
+      false,
+    );
+  }
+});
+
+export const verifyOpenAIAuthenticationFailure = Effect.fn(
+  "Acceptance.verifyOpenAIAuthenticationFailure",
+)(function* (runCommand: CommandRunner) {
+  const paths = yield* Path.Path;
+
+  const projectRoot = yield* createProject("antisprawl-openai-auth-", {
+    [structuralCheckScenario.configPath]: `{
+  "version": 1,
+  "embedding": { "provider": "openai" },
+  "sources": { "include": ["src/**/*.ts"] }
+}\n`,
+    ...structuralCheckScenario.baseline,
+  });
+
+  const result = runCommand(projectRoot, ["index"], { OPENAI_API_KEY: "" });
+
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stdout).toBe("");
+  expect(result.stderr).toBe(
+    "error[embedding_authentication_failed]: Embedding authentication failed.\n",
+  );
+
+  const index = new Database(paths.join(projectRoot, ".antisprawl/index.sqlite"), {
+    readonly: true,
+  });
+
+  expect(index.query("select count(*) as count from files").get()).toEqual({ count: 1 });
+  expect(index.query("select complete from profile").get()).toEqual({ complete: 0 });
+  index.close();
+});
 
 export const verifyStructuralIndex = Effect.fn("Acceptance.verifyStructuralIndex")(function* (
   runCommand: CommandRunner,
@@ -255,6 +336,114 @@ export const verifyStructuralCheck = Effect.fn("Acceptance.verifyStructuralCheck
   }
 });
 
+export const verifyLiveOpenAIProfile = Effect.fn("Acceptance.verifyLiveOpenAIProfile")(function* (
+  runCommand: CommandRunner,
+  provider: "openai" | "openai-codex",
+  dimensions: 384 | 1536,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const paths = yield* Path.Path;
+  const failures: Array<string> = [];
+
+  for (const edit of structuralCheckScenario.edits) {
+    const projectRoot = yield* createProject(`antisprawl-${provider}-${dimensions}-`, {
+      [structuralCheckScenario.configPath]: `{
+  "version": 1,
+  "embedding": { "provider": "${provider}" },
+  "sources": { "include": ["src/**/*.ts"] }
+}\n`,
+      ...structuralCheckScenario.baseline,
+    });
+
+    const environment = {
+      ANTISPRAW_ACCEPTANCE_OPENAI_DIMENSIONS: String(dimensions),
+      XDG_CACHE_HOME: paths.join(projectRoot, ".cache"),
+    };
+
+    const indexed = runCommand(projectRoot, ["index"], environment);
+
+    expect({ exitCode: indexed.exitCode, stderr: indexed.stderr }, edit.name).toEqual({
+      exitCode: 0,
+      stderr: "",
+    });
+    expect(yield* Schema.decodeEffect(Json)(indexed.stdout), edit.name).toMatchObject({
+      analysis: { mode: "semantic", vectorSearch: "sqlite_vec" },
+      coverage: { status: "complete" },
+      usage: {
+        embedding: {
+          requests: 1,
+          inputs: 1,
+          inputTokens: expect.any(Number),
+          durationMs: expect.any(Number),
+        },
+      },
+      provenance: {
+        profile: {
+          provider,
+          model: "text-embedding-3-small",
+          dimensions,
+          language: "typescript",
+          embeddingRepresentation: 2,
+          detector: 2,
+          semanticThreshold: 0.85,
+          calibration: "calibrated",
+        },
+      },
+    });
+
+    yield* fs.writeFileString(paths.join(projectRoot, "src/edit.ts"), edit.source);
+
+    const checked = runCommand(projectRoot, ["check", "src/edit.ts"], environment);
+    const output = yield* Schema.decodeEffect(Json)(checked.stdout);
+    const core = yield* Schema.decodeEffect(CheckOutput)(checked.stdout);
+
+    expect({ exitCode: checked.exitCode, stderr: checked.stderr }, edit.name).toEqual({
+      exitCode: 0,
+      stderr: "",
+    });
+    expect(output, edit.name).toMatchObject({
+      analysis: { mode: "semantic", vectorSearch: "sqlite_vec" },
+      coverage: { status: "complete" },
+      provenance: {
+        profile: {
+          provider,
+          model: "text-embedding-3-small",
+          dimensions,
+          language: "typescript",
+          embeddingRepresentation: 2,
+          detector: 2,
+          semanticThreshold: 0.85,
+          calibration: "calibrated",
+        },
+      },
+    });
+
+    if (edit.name !== "tiny wrapper") {
+      expect(output, edit.name).toMatchObject({
+        usage: {
+          embedding: {
+            requests: 1,
+            inputs: 1,
+            inputTokens: expect.any(Number),
+            durationMs: expect.any(Number),
+          },
+        },
+      });
+    }
+
+    const passed =
+      edit.finding === undefined
+        ? core.findings.length === 0
+        : core.findings.length === 1 &&
+          core.findings[0]?.edited.qualifiedName === edit.finding.edited &&
+          core.findings[0]?.candidate.qualifiedName === "collectReadyJobs";
+
+    if (!passed) failures.push(edit.name);
+  }
+
+  return failures;
+});
+
 export const verifySemanticCheck = Effect.fn("Acceptance.verifySemanticCheck")(function* (
   runCommand: CommandRunner,
 ) {
@@ -281,7 +470,7 @@ export const verifySemanticCheck = Effect.fn("Acceptance.verifySemanticCheck")(f
         model: "acceptance-v1",
         dimensions: 2,
         language: "typescript",
-        embeddingRepresentation: 1,
+        embeddingRepresentation: 2,
         detector: 2,
         semanticThreshold: 0.85,
         calibration: "calibrated",
@@ -435,12 +624,49 @@ export const verifySemanticCheck = Effect.fn("Acceptance.verifySemanticCheck")(f
 
   expect(runCommand(identityRoot, ["index"], identityEnvironment).exitCode).toBe(0);
 
-  const reconciled = runCommand(identityRoot, ["check"], {
+  const profileIndex = new Database(paths.join(identityRoot, ".antisprawl/index.sqlite"));
+
+  profileIndex.run("update profile set semantic_threshold = 0.8");
+  profileIndex.close();
+
+  const changedProfile = runCommand(identityRoot, ["check"], {
     ...identityEnvironment,
-    ANTISPRAW_ACCEPTANCE_EMBEDDING_MODEL: "acceptance-v2",
     ANTISPRAW_ACCEPTANCE_EMBEDDING_TRACE: identityTrace,
   });
 
+  expect({ exitCode: changedProfile.exitCode, stderr: changedProfile.stderr }).toEqual({
+    exitCode: 0,
+    stderr: "warning[semantic_index_partial]: Run antisprawl index.\n",
+  });
+  expect(yield* fs.exists(identityTrace)).toBe(false);
+  expect(yield* Schema.decodeEffect(Json)(changedProfile.stdout)).toMatchObject({
+    analysis: { mode: "structural_only" },
+    coverage: { status: "partial" },
+  });
+  expect(runCommand(identityRoot, ["index"], identityEnvironment).exitCode).toBe(0);
+
+  const changedIdentityEnvironment = {
+    ...identityEnvironment,
+    ANTISPRAW_ACCEPTANCE_EMBEDDING_MODEL: "acceptance-v2",
+    ANTISPRAW_ACCEPTANCE_EMBEDDING_TRACE: identityTrace,
+  };
+
+  const checkedIdentity = runCommand(identityRoot, ["check"], changedIdentityEnvironment);
+  const checkedIdentityOutput = yield* Schema.decodeEffect(Json)(checkedIdentity.stdout);
+
+  expect({ exitCode: checkedIdentity.exitCode, stderr: checkedIdentity.stderr }).toEqual({
+    exitCode: 0,
+    stderr: "warning[semantic_index_partial]: Run antisprawl index.\n",
+  });
+  expect(yield* fs.exists(identityTrace)).toBe(false);
+  expect(checkedIdentityOutput).toMatchObject({
+    analysis: { mode: "structural_only" },
+    coverage: { status: "partial" },
+    work: { vectors: { indexed: 0, reused: 0, removed: 0 } },
+    provenance: { profile: { model: "acceptance-v2" } },
+  });
+
+  const reconciled = runCommand(identityRoot, ["index"], changedIdentityEnvironment);
   const reconciledOutput = yield* Schema.decodeEffect(Json)(reconciled.stdout);
 
   expect({ exitCode: reconciled.exitCode, stderr: reconciled.stderr }).toEqual({
@@ -624,6 +850,55 @@ export const verifySemanticInterruption = Effect.fn("Acceptance.verifySemanticIn
     expect(completed.query(profileQuery).all()).toEqual(cleanIndex.query(profileQuery).all());
     completed.close();
     cleanIndex.close();
+
+    const changedRoot = yield* createProject("antisprawl-embedding-source-change-", files);
+    const changedTrace = paths.join(changedRoot, "batch.trace");
+
+    const changedChild = Bun.spawn([...commandPrefix, "index"], {
+      cwd: changedRoot,
+      env: {
+        ...Bun.env,
+        ANTISPRAW_ACCEPTANCE_EMBEDDINGS: "deterministic-v1",
+        ANTISPRAW_ACCEPTANCE_EMBEDDING_TRACE: changedTrace,
+        ANTISPRAW_ACCEPTANCE_PAUSE_AFTER_BATCH: "1",
+        ANTISPRAW_ACCEPTANCE_PAUSE_AFTER_BATCH_MS: "500",
+        XDG_CACHE_HOME: paths.join(changedRoot, ".cache"),
+      },
+      stderr: "pipe",
+      stdout: "pipe",
+    });
+
+    let providerPaused = false;
+
+    for (let attempt = 0; attempt < 500; attempt += 1) {
+      if (yield* fs.exists(changedTrace)) {
+        providerPaused = true;
+        break;
+      }
+
+      yield* Effect.sleep(10);
+    }
+
+    expect(providerPaused).toBe(true);
+    yield* fs.writeFileString(
+      paths.join(changedRoot, "src/jobs.ts"),
+      `${structuralCheckScenario.baseline["src/jobs.ts"]}\n// changed during provider work\n`,
+    );
+
+    const changedExitCode = yield* Effect.promise(() => changedChild.exited);
+    const changedStdout = yield* Effect.promise(() => new Response(changedChild.stdout).text());
+    const changedStderr = yield* Effect.promise(() => new Response(changedChild.stderr).text());
+
+    expect(changedExitCode).not.toBe(0);
+    expect(changedStdout).toBe("");
+    expect(changedStderr).toContain("error[source_changed_during_index]");
+
+    const changedIndex = new Database(paths.join(changedRoot, ".antisprawl/index.sqlite"), {
+      readonly: true,
+    });
+
+    expect(changedIndex.query("select complete from profile").get()).toEqual({ complete: 0 });
+    changedIndex.close();
   },
 );
 
@@ -673,7 +948,7 @@ export const verifyExplicitIndexFailure = Effect.fn("Acceptance.verifyExplicitIn
     const output = yield* Schema.decodeEffect(Json)(checked.stdout);
 
     expect(checked.exitCode).toBe(0);
-    expect(checked.stderr).toBe("warning[semantic_index_partial]\n");
+    expect(checked.stderr).toBe("warning[semantic_index_partial]: Run antisprawl index.\n");
     expect(yield* fs.exists(tracePath)).toBe(false);
     expect(output).toMatchObject({
       analysis: { mode: "structural_only" },
@@ -681,11 +956,23 @@ export const verifyExplicitIndexFailure = Effect.fn("Acceptance.verifyExplicitIn
       findings: [{ type: "probable_duplicate" }],
     });
 
-    const reconciled = runCommand(projectRoot, ["check"], {
+    const reconciliationEnvironment = {
       ANTISPRAW_ACCEPTANCE_EMBEDDINGS: "deterministic-v1",
       ANTISPRAW_ACCEPTANCE_EMBEDDING_TRACE: tracePath,
       XDG_CACHE_HOME: paths.join(projectRoot, ".cache"),
+    };
+
+    const unreconciled = runCommand(projectRoot, ["check"], reconciliationEnvironment);
+
+    expect(unreconciled.exitCode).toBe(0);
+    expect(unreconciled.stderr).toBe("warning[semantic_index_partial]: Run antisprawl index.\n");
+    expect(yield* fs.exists(tracePath)).toBe(false);
+    expect(yield* Schema.decodeEffect(Json)(unreconciled.stdout)).toMatchObject({
+      analysis: { mode: "structural_only" },
+      coverage: { status: "partial" },
     });
+
+    const reconciled = runCommand(projectRoot, ["index"], reconciliationEnvironment);
 
     expect(reconciled.exitCode).toBe(0);
     expect(yield* fs.exists(tracePath)).toBe(true);
