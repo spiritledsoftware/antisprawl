@@ -1,23 +1,30 @@
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { Database } from "bun:sqlite";
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import type { Profile } from "../../src/embedding.ts";
 import {
-  activateProfile,
-  completeProfile,
-  persistEmbeddingBatch,
   readIndex,
   updateIndex,
+  withIndexSession,
   type FileRecord,
   type IndexIdentity,
+  type IndexSession,
 } from "../../src/index.ts";
 import type { StructuralRepresentation } from "../../src/representation.ts";
 
 const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
   Effect.runPromise(effect.pipe(Effect.provide(BunServices.layer)));
+
+const inIndexSession = <A, E, R>(
+  indexPath: string,
+  use: (session: IndexSession) => Effect.Effect<A, E, R>,
+) =>
+  readIndex(indexPath, identity).pipe(
+    Effect.flatMap((snapshot) => withIndexSession(indexPath, identity, snapshot, use)),
+  );
 
 const temporaryIndexPath = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -212,6 +219,138 @@ test("Index snapshots expose current Symbols and count removals", () =>
     ),
   ));
 
+test("an Index session rejects a stale structural update", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const indexPath = yield* temporaryIndexPath;
+
+        yield* updateIndex(
+          indexPath,
+          identity,
+          [{ path: "src/example.ts", contentHash: "old" }],
+          [file("old", [symbol("old")])],
+        );
+
+        const snapshot = yield* readIndex(indexPath, identity);
+
+        yield* withIndexSession(indexPath, identity, snapshot, (session) =>
+          Effect.gen(function* () {
+            yield* updateIndex(
+              indexPath,
+              identity,
+              [{ path: "src/example.ts", contentHash: "external" }],
+              [file("external", [symbol("external")])],
+            );
+
+            const error = yield* Effect.flip(
+              session.updateIndex(
+                [{ path: "src/example.ts", contentHash: "ours" }],
+                [file("ours", [symbol("ours")])],
+              ),
+            );
+
+            expect(error).toMatchObject({ code: "index_currentness_changed" });
+          }),
+        );
+      }),
+    ),
+  ));
+
+test("an Index session rejects an incompatible Profile change between batches", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const indexPath = yield* temporaryIndexPath;
+        const firstHash = "04".repeat(32);
+        const secondHash = "05".repeat(32);
+        const nextProfile = { ...profile, model: "acceptance-v2" };
+
+        yield* updateIndex(indexPath, identity, [], []);
+
+        const snapshot = yield* readIndex(indexPath, identity);
+
+        yield* withIndexSession(indexPath, identity, snapshot, (session) =>
+          Effect.gen(function* () {
+            yield* session.activateProfile(profile);
+            yield* session.persistEmbeddingBatch(profile, {
+              vectors: [{ hash: firstHash, vector: new Float32Array([1, 0]) }],
+              usage: { requests: 1, inputs: 1, inputTokens: 1, durationMs: 1 },
+            });
+
+            const current = yield* readIndex(indexPath, identity);
+
+            yield* withIndexSession(indexPath, identity, current, (other) =>
+              other.activateProfile(nextProfile),
+            );
+
+            const error = yield* Effect.flip(
+              session.persistEmbeddingBatch(profile, {
+                vectors: [{ hash: secondHash, vector: new Float32Array([0, 1]) }],
+                usage: { requests: 1, inputs: 1, inputTokens: 1, durationMs: 1 },
+              }),
+            );
+
+            expect(error).toMatchObject({ code: "embedding_profile_changed" });
+          }),
+        );
+
+        const changed = yield* readIndex(indexPath, identity);
+
+        expect(changed.profile).toMatchObject({
+          model: nextProfile.model,
+          usage: { requests: 0, inputs: 0, inputTokens: 0, durationMs: 0 },
+        });
+
+        yield* withIndexSession(indexPath, identity, changed, (session) =>
+          session.activateProfile(profile),
+        );
+
+        expect([...(yield* readIndex(indexPath, identity)).vectors.keys()]).toEqual([firstHash]);
+      }),
+    ),
+  ));
+
+test("one Index session validates the complete snapshot once across embedding batches", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const indexPath = yield* temporaryIndexPath;
+
+        yield* updateIndex(indexPath, identity, [], []);
+
+        const query = spyOn(Database.prototype, "query");
+
+        yield* Effect.gen(function* () {
+          const snapshot = yield* readIndex(indexPath, identity);
+
+          yield* withIndexSession(indexPath, identity, snapshot, (session) =>
+            Effect.gen(function* () {
+              yield* session.activateProfile(profile);
+
+              for (const hash of ["04".repeat(32), "05".repeat(32)]) {
+                yield* session.persistEmbeddingBatch(profile, {
+                  vectors: [{ hash, vector: new Float32Array([1, 0]) }],
+                  usage: { requests: 1, inputs: 1, inputTokens: 1, durationMs: 1 },
+                });
+              }
+
+              yield* session.completeProfile(profile);
+            }),
+          );
+
+          const vectorSnapshotReads = query.mock.calls.filter(([sql]) =>
+            String(sql).includes(
+              "SELECT embedding_identity, input_hash, dimensions, vector FROM vectors",
+            ),
+          );
+
+          expect(vectorSnapshotReads).toHaveLength(1);
+        }).pipe(Effect.ensuring(Effect.sync(() => query.mockRestore())));
+      }),
+    ),
+  ));
+
 test("complete embedding batches are durable and threshold changes reuse vectors", () =>
   run(
     Effect.scoped(
@@ -225,13 +364,15 @@ test("complete embedding batches are durable and threshold changes reuse vectors
           [{ path: "src/example.ts", contentHash: "current" }],
           [file("current", [{ ...represented, tokenCount: 20 }])],
         );
-        yield* activateProfile(indexPath, identity, profile);
+        yield* inIndexSession(indexPath, (session) => session.activateProfile(profile));
 
         expect(
-          yield* persistEmbeddingBatch(indexPath, identity, profile, {
-            vectors: [{ hash: represented.embeddingHash, vector: new Float32Array([1, -2.5]) }],
-            usage: { requests: 1, inputs: 1, inputTokens: 7, durationMs: 3 },
-          }),
+          yield* inIndexSession(indexPath, (session) =>
+            session.persistEmbeddingBatch(profile, {
+              vectors: [{ hash: represented.embeddingHash, vector: new Float32Array([1, -2.5]) }],
+              usage: { requests: 1, inputs: 1, inputTokens: 7, durationMs: 3 },
+            }),
+          ),
         ).toEqual({ indexed: 1, reused: 0 });
 
         const partial = yield* readIndex(indexPath, identity);
@@ -242,13 +383,17 @@ test("complete embedding batches are durable and threshold changes reuse vectors
           usage: { requests: 1, inputs: 1, inputTokens: 7, durationMs: 3 },
         });
         expect([...partial.vectors.get(represented.embeddingHash)!]).toEqual([1, -2.5]);
-        expect(yield* completeProfile(indexPath, identity, profile)).toEqual({ removed: 0 });
+        expect(
+          yield* inIndexSession(indexPath, (session) => session.completeProfile(profile)),
+        ).toEqual({ removed: 0 });
         expect((yield* readIndex(indexPath, identity)).profile?.complete).toBe(true);
 
         const rescored = { ...profile, semanticThreshold: 0.9 };
 
-        yield* activateProfile(indexPath, identity, rescored);
-        expect(yield* completeProfile(indexPath, identity, rescored)).toEqual({ removed: 0 });
+        yield* inIndexSession(indexPath, (session) => session.activateProfile(rescored));
+        expect(
+          yield* inIndexSession(indexPath, (session) => session.completeProfile(rescored)),
+        ).toEqual({ removed: 0 });
         expect([...(yield* readIndex(indexPath, identity)).vectors.keys()]).toEqual([
           represented.embeddingHash,
         ]);
@@ -270,21 +415,29 @@ test("different models never mix vectors even when dimensions match", () =>
           [{ path: "src/example.ts", contentHash: "current" }],
           [file("current", [represented])],
         );
-        yield* activateProfile(indexPath, identity, profile);
-        yield* persistEmbeddingBatch(indexPath, identity, profile, {
-          vectors: [{ hash: represented.embeddingHash, vector: new Float32Array([1, 0]) }],
-          usage: { requests: 1, inputs: 1, inputTokens: 1, durationMs: 1 },
-        });
-        yield* completeProfile(indexPath, identity, profile);
-        yield* activateProfile(indexPath, identity, nextProfile);
+        yield* inIndexSession(indexPath, (session) =>
+          Effect.gen(function* () {
+            yield* session.activateProfile(profile);
+            yield* session.persistEmbeddingBatch(profile, {
+              vectors: [{ hash: represented.embeddingHash, vector: new Float32Array([1, 0]) }],
+              usage: { requests: 1, inputs: 1, inputTokens: 1, durationMs: 1 },
+            });
+            yield* session.completeProfile(profile);
+            yield* session.activateProfile(nextProfile);
+          }),
+        );
 
         expect((yield* readIndex(indexPath, identity)).vectors.size).toBe(0);
 
-        yield* persistEmbeddingBatch(indexPath, identity, nextProfile, {
-          vectors: [{ hash: represented.embeddingHash, vector: new Float32Array([0, 1]) }],
-          usage: { requests: 1, inputs: 1, inputTokens: 1, durationMs: 1 },
-        });
-        yield* completeProfile(indexPath, identity, nextProfile);
+        yield* inIndexSession(indexPath, (session) =>
+          Effect.gen(function* () {
+            yield* session.persistEmbeddingBatch(nextProfile, {
+              vectors: [{ hash: represented.embeddingHash, vector: new Float32Array([0, 1]) }],
+              usage: { requests: 1, inputs: 1, inputTokens: 1, durationMs: 1 },
+            });
+            yield* session.completeProfile(nextProfile);
+          }),
+        );
 
         const database = new Database(indexPath, { readonly: true });
 
@@ -293,6 +446,46 @@ test("different models never mix vectors even when dimensions match", () =>
         expect([...(yield* readIndex(indexPath, identity)).vectors.values()][0]).toEqual(
           new Float32Array([0, 1]),
         );
+      }),
+    ),
+  ));
+
+test("Profile activation rejects incompatible dormant vector dimensions", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const indexPath = yield* temporaryIndexPath;
+        const represented = { ...symbol("current"), tokenCount: 20 };
+        const nextProfile = { ...profile, model: "acceptance-v2" };
+
+        yield* updateIndex(
+          indexPath,
+          identity,
+          [{ path: "src/example.ts", contentHash: "current" }],
+          [file("current", [represented])],
+        );
+        yield* inIndexSession(indexPath, (session) =>
+          Effect.gen(function* () {
+            yield* session.activateProfile(profile);
+            yield* session.persistEmbeddingBatch(profile, {
+              vectors: [{ hash: represented.embeddingHash, vector: new Float32Array([1, 0]) }],
+              usage: { requests: 1, inputs: 1, inputTokens: 1, durationMs: 1 },
+            });
+            yield* session.completeProfile(profile);
+            yield* session.activateProfile(nextProfile);
+          }),
+        );
+
+        const database = new Database(indexPath);
+
+        database.run("update vectors set dimensions = 1, vector = X'0000803f'");
+        database.close();
+
+        expect(
+          yield* Effect.flip(
+            inIndexSession(indexPath, (session) => session.activateProfile(profile)),
+          ),
+        ).toMatchObject({ code: "index_invalid" });
       }),
     ),
   ));
@@ -316,12 +509,16 @@ test("structural changes mark a complete Profile partial before replacing Symbol
           [{ path: "src/example.ts", contentHash: "old" }],
           [file("old", [oldSymbol])],
         );
-        yield* activateProfile(indexPath, identity, profile);
-        yield* persistEmbeddingBatch(indexPath, identity, profile, {
-          vectors: [{ hash: oldSymbol.embeddingHash, vector: new Float32Array([1, 0]) }],
-          usage: { requests: 1, inputs: 1, inputTokens: 1, durationMs: 1 },
-        });
-        yield* completeProfile(indexPath, identity, profile);
+        yield* inIndexSession(indexPath, (session) =>
+          Effect.gen(function* () {
+            yield* session.activateProfile(profile);
+            yield* session.persistEmbeddingBatch(profile, {
+              vectors: [{ hash: oldSymbol.embeddingHash, vector: new Float32Array([1, 0]) }],
+              usage: { requests: 1, inputs: 1, inputTokens: 1, durationMs: 1 },
+            });
+            yield* session.completeProfile(profile);
+          }),
+        );
 
         yield* updateIndex(
           indexPath,
@@ -345,13 +542,15 @@ test("an invalid embedding batch changes neither vectors nor usage", () =>
         const indexPath = yield* temporaryIndexPath;
 
         yield* updateIndex(indexPath, identity, [], []);
-        yield* activateProfile(indexPath, identity, profile);
+        yield* inIndexSession(indexPath, (session) => session.activateProfile(profile));
 
         const error = yield* Effect.flip(
-          persistEmbeddingBatch(indexPath, identity, profile, {
-            vectors: [{ hash: "04".repeat(32), vector: new Float32Array([Number.NaN, 0]) }],
-            usage: { requests: 1, inputs: 1, inputTokens: 1, durationMs: 1 },
-          }),
+          inIndexSession(indexPath, (session) =>
+            session.persistEmbeddingBatch(profile, {
+              vectors: [{ hash: "04".repeat(32), vector: new Float32Array([Number.NaN, 0]) }],
+              usage: { requests: 1, inputs: 1, inputTokens: 1, durationMs: 1 },
+            }),
+          ),
         );
 
         expect(error).toMatchObject({ code: "embedding_vector_non_finite" });
@@ -375,7 +574,7 @@ test("invalid persisted Profile semantics are rejected", () =>
         const indexPath = yield* temporaryIndexPath;
 
         yield* updateIndex(indexPath, identity, [], []);
-        yield* activateProfile(indexPath, identity, profile);
+        yield* inIndexSession(indexPath, (session) => session.activateProfile(profile));
 
         const database = new Database(indexPath);
 

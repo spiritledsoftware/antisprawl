@@ -21,20 +21,19 @@ import {
 } from "./embedding.ts";
 import { AppError, appError } from "./errors.ts";
 import {
-  activateProfile,
-  completeProfile,
   embeddingIdentityHash,
   indexSchemaVersion,
-  persistEmbeddingBatch,
   profileMatches,
   readIndex,
   readIndexForBaseline,
   replaceIndex,
   searchVectorCandidates,
   updateIndex,
+  withIndexSession,
   type CurrentFile,
   type FileRecord,
   type IndexIdentity,
+  type IndexSession,
   type IndexSnapshot,
   type IndexWork,
 } from "./index.ts";
@@ -377,14 +376,12 @@ const writeBatchTrace = Effect.fn("App.writeBatchTrace")(function* (
 });
 
 const embedRequired = Effect.fn("App.embedRequired")(function* (
-  context: Context,
+  session: IndexSession,
   provider: EmbeddingProvider,
   required: ReadonlyArray<IndexedSymbol>,
   represented: ReadonlyArray<FileRecord>,
 ) {
-  yield* activateProfile(context.indexPath, context.identity, provider.profile);
-
-  const snapshot = yield* readIndex(context.indexPath, context.identity);
+  const availableHashes = yield* session.activateProfile(provider.profile);
 
   const requiredHashes = [
     ...new Set(
@@ -402,7 +399,7 @@ const embedRequired = Effect.fn("App.embedRequired")(function* (
     ),
   );
 
-  const missing = requiredHashes.filter((hash) => !snapshot.vectors.has(hash));
+  const missing = requiredHashes.filter((hash) => !availableHashes.has(hash));
   let usage: EmbeddingUsage = { requests: 0, inputs: 0, inputTokens: 0, durationMs: 0 };
   let indexed = 0;
   let reused = requiredHashes.length - missing.length;
@@ -426,12 +423,7 @@ const embedRequired = Effect.fn("App.embedRequired")(function* (
 
     const batch = yield* runEmbeddingBatch(provider, requests);
 
-    const persisted = yield* persistEmbeddingBatch(
-      context.indexPath,
-      context.identity,
-      provider.profile,
-      batch,
-    );
+    const persisted = yield* session.persistEmbeddingBatch(provider.profile, batch);
 
     indexed += persisted.indexed;
     reused += persisted.reused;
@@ -447,11 +439,11 @@ const embedRequired = Effect.fn("App.embedRequired")(function* (
 });
 
 const completeEmbedding = Effect.fn("App.completeEmbedding")(function* (
-  context: Context,
+  session: IndexSession,
   provider: EmbeddingProvider,
   work: EmbeddingWork,
 ) {
-  const completed = yield* completeProfile(context.indexPath, context.identity, provider.profile);
+  const completed = yield* session.completeProfile(provider.profile);
 
   return {
     ...work,
@@ -582,14 +574,24 @@ export const indexProject = Effect.fn("App.indexProject")(function* (startingDir
   if (context.provider !== undefined) {
     const structural = yield* readIndex(context.indexPath, context.identity);
 
-    embeddingWork = yield* embedRequired(
-      context,
-      context.provider,
-      structural.symbols,
-      replacements,
+    embeddingWork = yield* withIndexSession(
+      context.indexPath,
+      context.identity,
+      structural,
+      (session) =>
+        Effect.gen(function* () {
+          const work = yield* embedRequired(
+            session,
+            context.provider!,
+            structural.symbols,
+            replacements,
+          );
+
+          yield* ensureSourcesUnchanged(context.project.root, currentFiles);
+
+          return yield* completeEmbedding(session, context.provider!, work);
+        }),
     );
-    yield* ensureSourcesUnchanged(context.project.root, currentFiles);
-    embeddingWork = yield* completeEmbedding(context, context.provider, embeddingWork);
   }
 
   const snapshot = yield* readIndex(context.indexPath, context.identity);
@@ -729,63 +731,84 @@ export const checkProject = Effect.fn("App.checkProject")(function* (
     });
   }
 
-  if (context.provider !== undefined && canEmbed) {
-    const required = prospectiveSymbols(previous, currentPaths, replacementByPath);
+  const persistStructural = Effect.fnUntraced(function* (session?: IndexSession) {
+    for (const [path, replacement] of replacementByPath) {
+      const finalSource = yield* sourceText(context.project.root, path);
+      const finalHash = sha256(finalSource);
 
-    const result = yield* embedRequired(context, context.provider, required, [
-      ...replacementByPath.values(),
-    ]).pipe(
-      Effect.match({
-        onFailure: (error) => ({ error }),
-        onSuccess: (work) => ({ work }),
-      }),
-    );
+      if (finalHash === replacement.contentHash) continue;
 
-    if ("error" in result) {
-      if (!Schema.is(AppError)(result.error)) {
-        return yield* appError("index_update_failed", "The Index could not be updated safely.");
-      }
-
-      embeddingError = result.error;
-      diagnostics.push({ severity: "warning", code: result.error.code });
-    } else {
-      embeddingWork = result.work;
+      replacementByPath.set(path, {
+        path,
+        contentHash: finalHash,
+        parseStatus: "stale",
+        symbols: [],
+      });
+      diagnostics.push({ severity: "warning", code: "source_changed_during_check", path });
     }
-  }
 
-  for (const [path, replacement] of replacementByPath) {
-    const finalSource = yield* sourceText(context.project.root, path);
-    const finalHash = sha256(finalSource);
+    const sortedCurrentPaths = [...currentPaths].sort();
 
-    if (finalHash === replacement.contentHash) continue;
+    const currentFiles = sortedCurrentPaths.map((path): CurrentFile => {
+      const contentHash =
+        replacementByPath.get(path)?.contentHash ?? previous.files.get(path)?.contentHash;
 
-    replacementByPath.set(path, {
-      path,
-      contentHash: finalHash,
-      parseStatus: "stale",
-      symbols: [],
+      if (contentHash === undefined) throw new Error(`Missing current hash for ${path}.`);
+
+      return { path, contentHash };
     });
-    diagnostics.push({ severity: "warning", code: "source_changed_during_check", path });
-  }
 
-  const sortedCurrentPaths = [...currentPaths].sort();
+    const replacements = [...replacementByPath.values()];
 
-  const currentFiles = sortedCurrentPaths.map((path): CurrentFile => {
-    const contentHash =
-      replacementByPath.get(path)?.contentHash ?? previous.files.get(path)?.contentHash;
+    const structuralWork =
+      session === undefined
+        ? yield* updateIndex(context.indexPath, context.identity, currentFiles, replacements)
+        : yield* session.updateIndex(currentFiles, replacements);
 
-    if (contentHash === undefined) throw new Error(`Missing current hash for ${path}.`);
-
-    return { path, contentHash };
+    return { sortedCurrentPaths, structuralWork };
   });
 
-  const structuralWork = yield* updateIndex(context.indexPath, context.identity, currentFiles, [
-    ...replacementByPath.values(),
-  ]);
+  const persisted =
+    context.provider !== undefined && canEmbed
+      ? yield* withIndexSession(context.indexPath, context.identity, previous, (session) =>
+          Effect.gen(function* () {
+            const required = prospectiveSymbols(previous, currentPaths, replacementByPath);
 
-  if (context.provider !== undefined && canEmbed && embeddingError === undefined) {
-    embeddingWork = yield* completeEmbedding(context, context.provider, embeddingWork);
-  }
+            const result = yield* embedRequired(session, context.provider!, required, [
+              ...replacementByPath.values(),
+            ]).pipe(
+              Effect.match({
+                onFailure: (error) => ({ error }),
+                onSuccess: (work) => ({ work }),
+              }),
+            );
+
+            if ("error" in result) {
+              if (!Schema.is(AppError)(result.error)) {
+                return yield* appError(
+                  "index_update_failed",
+                  "The Index could not be updated safely.",
+                );
+              }
+
+              embeddingError = result.error;
+              diagnostics.push({ severity: "warning", code: result.error.code });
+            } else {
+              embeddingWork = result.work;
+            }
+
+            const persisted = yield* persistStructural(session);
+
+            if (embeddingError === undefined) {
+              embeddingWork = yield* completeEmbedding(session, context.provider!, embeddingWork);
+            }
+
+            return persisted;
+          }),
+        )
+      : yield* persistStructural();
+
+  const { sortedCurrentPaths, structuralWork } = persisted;
 
   const current = yield* readIndex(context.indexPath, context.identity);
 
