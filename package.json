@@ -10,7 +10,7 @@
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "lint:staged": "lint-staged",
-    "prepare": "husky && effect-tsgo patch --typescript --oxlint",
+    "prepare": "husky && effect-tsgo patch --typescript --oxlint && ./scripts/sync-reference-repos.sh",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "verify": "bun run format:check && bun run lint && bun run typecheck && bun run test"
@@ -30,6 +30,7 @@
     "oxfmt": "^0.68.0",
     "oxlint": "1.82.0",
     "oxlint-tsgolint": "7.0.2001",
+    "skills": "^1.5.26",
     "typescript": "^7.0.2"
   },
   "devEngines": {
