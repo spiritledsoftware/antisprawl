@@ -4,7 +4,6 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { applicationCosine, decodeVector } from "../../src/embedding.ts";
 import { structuralCheckScenario } from "./structural-check.scenario.ts";
 import { structuralIndexScenario } from "./structural-index.scenario.ts";
 
@@ -344,8 +343,7 @@ export const verifyLiveOpenAIProfile = Effect.fn("Acceptance.verifyLiveOpenAIPro
 ) {
   const fs = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;
-  const similarities: Array<{ readonly case: string; readonly cosine: number }> = [];
-  let passed = true;
+  const failures: Array<string> = [];
 
   for (const edit of structuralCheckScenario.edits) {
     const projectRoot = yield* createProject(`antisprawl-${provider}-${dimensions}-`, {
@@ -433,44 +431,17 @@ export const verifyLiveOpenAIProfile = Effect.fn("Acceptance.verifyLiveOpenAIPro
       });
     }
 
-    passed &&=
+    const passed =
       edit.finding === undefined
         ? core.findings.length === 0
         : core.findings.length === 1 &&
           core.findings[0]?.edited.qualifiedName === edit.finding.edited &&
           core.findings[0]?.candidate.qualifiedName === "collectReadyJobs";
 
-    if (edit.finding !== undefined) {
-      const index = new Database(paths.join(projectRoot, ".antisprawl/index.sqlite"), {
-        readonly: true,
-      });
-
-      const rows = index
-        .query<{ qualified_name: string; vector: Uint8Array }, [string, string]>(
-          `select symbols.qualified_name, vectors.vector
-           from symbols join vectors on vectors.input_hash = symbols.embedding_hash
-           where symbols.qualified_name in (?, ?)`,
-        )
-        .all("collectReadyJobs", edit.finding.edited);
-
-      index.close();
-
-      const candidate = rows.find(({ qualified_name }) => qualified_name === "collectReadyJobs");
-      const edited = rows.find(({ qualified_name }) => qualified_name === edit.finding.edited);
-
-      if (candidate !== undefined && edited !== undefined) {
-        similarities.push({
-          case: edit.name,
-          cosine: applicationCosine(
-            decodeVector(candidate.vector, dimensions),
-            decodeVector(edited.vector, dimensions),
-          ),
-        });
-      }
-    }
+    if (!passed) failures.push(edit.name);
   }
 
-  return { passed, similarities };
+  return failures;
 });
 
 export const verifySemanticCheck = Effect.fn("Acceptance.verifySemanticCheck")(function* (

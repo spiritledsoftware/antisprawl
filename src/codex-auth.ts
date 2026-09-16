@@ -95,24 +95,19 @@ const readAuth = Effect.fn("CodexAuth.read")(function* (path: string, error: App
   } satisfies DecodedAuth;
 });
 
-const jwtExpiry = Effect.fn("CodexAuth.jwtExpiry")(function* (token: string) {
-  const segment = token.split(".")[1];
+const jwtExpiry = (token: string): number | undefined => {
+  try {
+    const payload = JSON.parse(
+      Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8"),
+    );
 
-  if (segment === undefined) return undefined;
+    const decoded = Schema.decodeUnknownOption(JwtPayload)(payload);
 
-  const text = yield* Effect.try({
-    try: () => Buffer.from(segment, "base64url").toString("utf8"),
-    catch: () => undefined,
-  }).pipe(Effect.match({ onFailure: () => undefined, onSuccess: (value) => value }));
-
-  if (text === undefined) return undefined;
-
-  return yield* Schema.decodeEffect(Json)(text).pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(JwtPayload)),
-    Effect.map(({ exp }) => exp),
-    Effect.match({ onFailure: () => undefined, onSuccess: (expiry) => expiry }),
-  );
-});
+    return Option.isSome(decoded) ? decoded.value.exp : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 const acquireLock = Effect.fn("CodexAuth.acquireLock")(function* (path: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -249,7 +244,7 @@ export const codexAccessToken = Effect.fn("CodexAuth.accessToken")(function* (
 ) {
   const path = yield* resolveAuthPath(environment);
   const auth = yield* readAuth(path, authFailure());
-  const expiry = yield* jwtExpiry(auth.accessToken);
+  const expiry = jwtExpiry(auth.accessToken);
   const now = yield* Clock.currentTimeMillis;
 
   return expiry !== undefined && expiry <= now / 1000 + 5 * 60

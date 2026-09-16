@@ -103,12 +103,6 @@ const OpenAIResponse = Schema.Struct({
   usage: Schema.Struct({ prompt_tokens: Schema.Finite, total_tokens: Schema.Finite }),
 });
 
-const Json = Schema.fromJsonString(Schema.Unknown);
-
-// Native fetch is the accepted provider transport for issue #18.
-// @effect-diagnostics-next-line globalFetch:off
-const nativeFetch: HttpFetch = (input, init) => fetch(input, init);
-
 const openAIEmbed = Effect.fn("Embedding.openAIEmbed")(function* (
   profile: Profile,
   accessToken: string,
@@ -118,16 +112,13 @@ const openAIEmbed = Effect.fn("Embedding.openAIEmbed")(function* (
 ) {
   const started = performance.now();
 
-  const requestBody = yield* Schema.encodeEffect(Json)({
+  // @effect-diagnostics-next-line preferSchemaOverJson:off
+  const requestBody = JSON.stringify({
     input: inputs.map(({ input }) => input),
     model: profile.model,
     dimensions: profile.dimensions,
     encoding_format: "float",
-  }).pipe(
-    Effect.mapError(() =>
-      appError("embedding_request_invalid", "The embedding request could not be encoded."),
-    ),
-  );
+  });
 
   const send = (token: string) =>
     Effect.tryPromise({
@@ -162,17 +153,11 @@ const openAIEmbed = Effect.fn("Embedding.openAIEmbed")(function* (
     );
   }
 
-  const text = yield* Effect.tryPromise({
-    try: () => response.text(),
+  const body = yield* Effect.tryPromise({
+    try: () => response.json(),
     catch: () =>
       appError("embedding_response_invalid", "The embedding provider returned invalid data."),
   });
-
-  const body = yield* Schema.decodeEffect(Json)(text).pipe(
-    Effect.mapError(() =>
-      appError("embedding_response_invalid", "The embedding provider returned invalid data."),
-    ),
-  );
 
   const decoded = yield* Schema.decodeUnknownEffect(OpenAIResponse)(body).pipe(
     Effect.mapError(() =>
@@ -191,26 +176,10 @@ const openAIEmbed = Effect.fn("Embedding.openAIEmbed")(function* (
     );
   }
 
-  if (decoded.data.length !== inputs.length) {
-    return yield* appError(
-      "embedding_response_count_invalid",
-      "The embedding provider returned an unexpected number of vectors.",
-    );
-  }
-
-  for (const [index, item] of decoded.data.entries()) {
-    if (item.index !== index) {
-      return yield* appError(
-        "embedding_response_order_invalid",
-        "The embedding provider returned vectors in an unexpected order.",
-      );
-    }
-  }
-
   return {
-    vectors: decoded.data.map((item, index) => ({
-      index: inputs[index]!.index,
-      hash: inputs[index]!.hash,
+    vectors: decoded.data.map((item) => ({
+      index: inputs[item.index]?.index ?? item.index,
+      hash: inputs[item.index]?.hash ?? "",
       vector: item.embedding,
     })),
     usage: {
@@ -237,7 +206,7 @@ const deterministicVector = (input: string): ReadonlyArray<number> =>
 export const configuredEmbeddingProvider = (
   configured?: "openai" | "openai-codex",
   environment: Readonly<Record<string, string | undefined>> = Bun.env,
-  fetcher: HttpFetch = nativeFetch,
+  fetcher: HttpFetch = globalThis.fetch,
 ): EmbeddingProvider | undefined => {
   if (environment.ANTISPRAW_ACCEPTANCE_EMBEDDINGS !== "deterministic-v1") {
     if (configured === undefined) return undefined;

@@ -242,6 +242,9 @@ const asIndexed = (path: string, symbol: StructuralRepresentation): IndexedSymbo
   ...symbol,
 });
 
+const completedProfileMatches = (active: IndexSnapshot["profile"], profile: Profile) =>
+  active !== undefined && active.complete && profileMatches(active, profile);
+
 const coverageFor = (
   currentPaths: ReadonlyArray<string>,
   snapshot: IndexSnapshot,
@@ -277,10 +280,7 @@ const coverageFor = (
   const failed = parseFailures + missingVectors;
 
   const profileIncomplete =
-    profile !== undefined &&
-    (snapshot.profile === undefined ||
-      !profileMatches(snapshot.profile, profile) ||
-      !snapshot.profile.complete);
+    profile !== undefined && !completedProfileMatches(snapshot.profile, profile);
 
   return {
     status:
@@ -719,9 +719,7 @@ export const checkProject = Effect.fn("App.checkProject")(function* (
 
   const canEmbed =
     context.provider !== undefined &&
-    previous.profile !== undefined &&
-    profileMatches(previous.profile, context.provider.profile) &&
-    previous.profile.complete;
+    completedProfileMatches(previous.profile, context.provider.profile);
 
   if (context.provider !== undefined && !canEmbed) {
     diagnostics.push({
@@ -794,9 +792,7 @@ export const checkProject = Effect.fn("App.checkProject")(function* (
   const semantic =
     context.provider !== undefined &&
     embeddingError === undefined &&
-    current.profile !== undefined &&
-    profileMatches(current.profile, context.provider.profile) &&
-    current.profile.complete;
+    completedProfileMatches(current.profile, context.provider.profile);
 
   const search = semantic ? yield* nativeSearch(context, current, edited) : undefined;
 

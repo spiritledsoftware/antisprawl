@@ -83,15 +83,13 @@ liveTest(
             let selected: 384 | 1536 | undefined;
 
             for (const dimensions of [384, 1536] as const) {
-              const result = yield* verifyLiveOpenAIProfile(runCommand, provider, dimensions);
+              const failures = yield* verifyLiveOpenAIProfile(runCommand, provider, dimensions);
 
               evidence.push(
-                `${dimensions}: ${result.similarities
-                  .map(({ case: name, cosine }) => `${name}=${cosine.toFixed(6)}`)
-                  .join(", ")}`,
+                `${dimensions}: ${failures.length === 0 ? "passed" : failures.join(", ")}`,
               );
 
-              if (result.passed) selected ??= dimensions;
+              if (failures.length === 0) selected ??= dimensions;
             }
 
             expect(selected, `${provider}: ${evidence.join("; ")}`).toBe(384);
