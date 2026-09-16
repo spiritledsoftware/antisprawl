@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "embedding": { "provider": "openai" },
+  "sources": {
+    "include": ["src/**/*.ts"],
+    "exclude": [],
+  },
+}

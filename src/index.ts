@@ -173,6 +173,10 @@ type NameRow = (typeof NameRows.Type)[number];
 
 type MetadataRow = (typeof MetadataRows.Type)[number];
 
+type ColumnRow = (typeof ColumnRows.Type)[number];
+
+type IntegrityRow = (typeof IntegrityRows.Type)[number];
+
 type CountRow = (typeof CountRows.Type)[number];
 
 type PresentRow = (typeof PresentRows.Type)[number];
@@ -283,7 +287,7 @@ const readValidatedIndex = Effect.fn("Index.readValidated")(function* (
       return yield* appError("index_incompatible", "The existing Index schema is incompatible.");
     }
 
-    const columnRows = yield* sql<{ table_name: string; columns: string }>`
+    const columnRows = yield* sql<ColumnRow>`
       SELECT 'files' AS table_name, group_concat(name, ',') AS columns
       FROM pragma_table_info('files')
       UNION ALL
@@ -336,7 +340,7 @@ const readValidatedIndex = Effect.fn("Index.readValidated")(function* (
       );
     }
 
-    const integrityRows = yield* sql<{ invalid: number }>`
+    const integrityRows = yield* sql<IntegrityRow>`
       SELECT CASE WHEN
         EXISTS (
           SELECT 1 FROM files
