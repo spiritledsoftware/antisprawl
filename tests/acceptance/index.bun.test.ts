@@ -5,6 +5,8 @@ import * as Scope from "effect/Scope";
 import {
   verifyEmbeddingFailures,
   verifyExplicitIndexFailure,
+  verifyOpenAIAuthenticationFailure,
+  verifyProviderDryRun,
   verifySemanticCheck,
   verifySemanticInterruption,
   verifyStructuralCheck,
@@ -35,6 +37,12 @@ const runCommand: CommandRunner = (projectRoot, arguments_, environment = {}) =>
 const run = <A, E>(
   effect: Effect.Effect<A, E, BunServices.BunServices | Scope.Scope>,
 ): Promise<A> => Effect.runPromise(Effect.scoped(effect).pipe(Effect.provide(BunServices.layer)));
+
+test("source remote index dry-run makes no provider call or mutation", () =>
+  run(verifyProviderDryRun(runCommand)));
+
+test("source OpenAI authentication failure preserves safe structural work", () =>
+  run(verifyOpenAIAuthenticationFailure(runCommand)));
 
 test("source index builds and reuses the real TypeScript Structural Index", () =>
   run(verifyStructuralIndex(runCommand)));

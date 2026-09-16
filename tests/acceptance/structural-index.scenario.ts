@@ -68,7 +68,7 @@ export function collectReadyJobs(jobs: ReadonlyArray<Job>): Array<Job> {
         ordered_bytes: 2208,
         qgram_type: "blob",
         qgram_bytes: 1856,
-        embedding_hash: "7107342e74fb241498bdaa32a16279a4de91036ec353ea8ac061e52333327617",
+        embedding_hash: "dc8a2945ee00a4fde671a08efaa404dc503f8d4c8956206eb9cf58b490a5611c",
       },
     ],
   },

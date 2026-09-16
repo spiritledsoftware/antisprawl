@@ -179,7 +179,7 @@ type PresentRow = (typeof PresentRows.Type)[number];
 
 const emptySnapshot = (): IndexSnapshot => ({ files: new Map(), symbols: [], vectors: new Map() });
 
-const profileEquals = (left: ActiveProfile, right: Profile) =>
+export const profileMatches = (left: ActiveProfile, right: Profile) =>
   left.identityHash === embeddingIdentityHash(right) &&
   left.detector === right.detector &&
   left.semanticThreshold === right.semanticThreshold &&
@@ -878,7 +878,7 @@ export const persistEmbeddingBatch = Effect.fn("Index.persistEmbeddingBatch")(fu
       Effect.gen(function* () {
         const active = yield* readProfile();
 
-        if (active === undefined || !profileEquals(active, profile)) {
+        if (active === undefined || !profileMatches(active, profile)) {
           return yield* appError(
             "embedding_profile_changed",
             "The active Profile changed during indexing.",
@@ -939,7 +939,7 @@ export const completeProfile = Effect.fn("Index.completeProfile")(function* (
       Effect.gen(function* () {
         const active = yield* readProfile();
 
-        if (active === undefined || !profileEquals(active, profile)) {
+        if (active === undefined || !profileMatches(active, profile)) {
           return yield* appError(
             "embedding_profile_changed",
             "The active Profile changed during indexing.",

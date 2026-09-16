@@ -6,6 +6,8 @@ import * as Path from "effect/Path";
 import {
   verifyEmbeddingFailures,
   verifyExplicitIndexFailure,
+  verifyOpenAIAuthenticationFailure,
+  verifyProviderDryRun,
   verifySemanticCheck,
   verifySemanticInterruption,
   verifyStructuralCheck,
@@ -68,6 +70,8 @@ compiledTest(
             };
           };
 
+          yield* verifyProviderDryRun(runCommand);
+          yield* verifyOpenAIAuthenticationFailure(runCommand);
           yield* verifyStructuralIndex(runCommand);
           yield* verifyStructuralCheck(runCommand);
           yield* verifySemanticCheck(runCommand);

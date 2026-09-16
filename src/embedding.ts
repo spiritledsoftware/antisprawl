@@ -1,7 +1,17 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import {
+  codexAccessToken,
+  refreshCodexAccessToken,
+  type CodexAuthServices,
+  type HttpFetch,
+} from "./codex-auth.ts";
 import { AppError, appError } from "./errors.ts";
 import { embeddingRepresentationVersion } from "./representation.ts";
+
+declare global {
+  var ANTISPRAW_LIVE_PROFILE_MATRIX: boolean | undefined;
+}
 
 export const semanticThreshold = 0.85;
 
@@ -55,7 +65,9 @@ const ProviderResponse = Schema.Struct({
 export interface EmbeddingProvider {
   readonly profile: Profile;
   readonly deadlineMs: number;
-  readonly embed: (inputs: ReadonlyArray<EmbeddingRequest>) => Effect.Effect<unknown, AppError>;
+  readonly embed: (
+    inputs: ReadonlyArray<EmbeddingRequest>,
+  ) => Effect.Effect<unknown, AppError, CodexAuthServices>;
 }
 
 export interface EmbeddedBatch {
@@ -76,6 +88,138 @@ export const embeddingIdentityHash = (identity: EmbeddingIdentity): string =>
     "hex",
   );
 
+const OpenAIResponse = Schema.Struct({
+  object: Schema.Literal("list"),
+  data: Schema.Array(
+    Schema.Struct({
+      object: Schema.Literal("embedding"),
+      index: Schema.Int,
+      // Decoded here so runEmbeddingBatch retains the typed non-finite-vector failure.
+      // @effect-diagnostics-next-line schemaNumber:off
+      embedding: Schema.Array(Schema.Number),
+    }),
+  ),
+  model: Schema.String,
+  usage: Schema.Struct({ prompt_tokens: Schema.Finite, total_tokens: Schema.Finite }),
+});
+
+const Json = Schema.fromJsonString(Schema.Unknown);
+
+// Native fetch is the accepted provider transport for issue #18.
+// @effect-diagnostics-next-line globalFetch:off
+const nativeFetch: HttpFetch = (input, init) => fetch(input, init);
+
+const openAIEmbed = Effect.fn("Embedding.openAIEmbed")(function* (
+  profile: Profile,
+  accessToken: string,
+  inputs: ReadonlyArray<EmbeddingRequest>,
+  fetcher: HttpFetch,
+  refresh?: (rejectedAccessToken: string) => Effect.Effect<string, AppError, CodexAuthServices>,
+) {
+  const started = performance.now();
+
+  const requestBody = yield* Schema.encodeEffect(Json)({
+    input: inputs.map(({ input }) => input),
+    model: profile.model,
+    dimensions: profile.dimensions,
+    encoding_format: "float",
+  }).pipe(
+    Effect.mapError(() =>
+      appError("embedding_request_invalid", "The embedding request could not be encoded."),
+    ),
+  );
+
+  const send = (token: string) =>
+    Effect.tryPromise({
+      try: (signal) =>
+        fetcher("https://api.openai.com/v1/embeddings", {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+          },
+          body: requestBody,
+          signal,
+        }),
+      catch: () =>
+        appError("embedding_transport_failed", "The embedding provider could not be reached."),
+    });
+
+  let response = yield* send(accessToken);
+
+  if (response.status === 401 && refresh !== undefined) {
+    response = yield* send(yield* refresh(accessToken));
+  }
+
+  if (response.status === 401) {
+    return yield* appError("embedding_authentication_failed", "Embedding authentication failed.");
+  }
+
+  if (!response.ok) {
+    return yield* appError(
+      "embedding_transport_failed",
+      "The embedding provider rejected the request.",
+    );
+  }
+
+  const text = yield* Effect.tryPromise({
+    try: () => response.text(),
+    catch: () =>
+      appError("embedding_response_invalid", "The embedding provider returned invalid data."),
+  });
+
+  const body = yield* Schema.decodeEffect(Json)(text).pipe(
+    Effect.mapError(() =>
+      appError("embedding_response_invalid", "The embedding provider returned invalid data."),
+    ),
+  );
+
+  const decoded = yield* Schema.decodeUnknownEffect(OpenAIResponse)(body).pipe(
+    Effect.mapError(() =>
+      appError("embedding_response_invalid", "The embedding provider returned invalid data."),
+    ),
+  );
+
+  if (
+    decoded.model !== profile.model ||
+    decoded.usage.prompt_tokens < 0 ||
+    decoded.usage.total_tokens < decoded.usage.prompt_tokens
+  ) {
+    return yield* appError(
+      "embedding_response_invalid",
+      "The embedding provider returned invalid data.",
+    );
+  }
+
+  if (decoded.data.length !== inputs.length) {
+    return yield* appError(
+      "embedding_response_count_invalid",
+      "The embedding provider returned an unexpected number of vectors.",
+    );
+  }
+
+  for (const [index, item] of decoded.data.entries()) {
+    if (item.index !== index) {
+      return yield* appError(
+        "embedding_response_order_invalid",
+        "The embedding provider returned vectors in an unexpected order.",
+      );
+    }
+  }
+
+  return {
+    vectors: decoded.data.map((item, index) => ({
+      index: inputs[index]!.index,
+      hash: inputs[index]!.hash,
+      vector: item.embedding,
+    })),
+    usage: {
+      inputTokens: decoded.usage.prompt_tokens,
+      durationMs: Math.max(0, Math.round(performance.now() - started)),
+    },
+  };
+});
+
 const deterministicProfile: Profile = {
   provider: "deterministic",
   model: "acceptance-v1",
@@ -91,9 +235,53 @@ const deterministicVector = (input: string): ReadonlyArray<number> =>
   /\b(?:Invoice|invoice|dueAt|paidAt)\b/.test(input) ? [0, 1] : [1, 0];
 
 export const configuredEmbeddingProvider = (
+  configured?: "openai" | "openai-codex",
   environment: Readonly<Record<string, string | undefined>> = Bun.env,
+  fetcher: HttpFetch = nativeFetch,
 ): EmbeddingProvider | undefined => {
-  if (environment.ANTISPRAW_ACCEPTANCE_EMBEDDINGS !== "deterministic-v1") return undefined;
+  if (environment.ANTISPRAW_ACCEPTANCE_EMBEDDINGS !== "deterministic-v1") {
+    if (configured === undefined) return undefined;
+
+    const acceptanceDimensions =
+      globalThis.ANTISPRAW_LIVE_PROFILE_MATRIX === true
+        ? Number(environment.ANTISPRAW_ACCEPTANCE_OPENAI_DIMENSIONS)
+        : 384;
+
+    const profile: Profile = {
+      provider: configured,
+      model: "text-embedding-3-small",
+      dimensions: acceptanceDimensions === 1536 ? 1536 : 384,
+      language: "typescript",
+      representation: embeddingRepresentationVersion,
+      detector: 2,
+      semanticThreshold,
+      calibration: "calibrated",
+    };
+
+    return {
+      profile,
+      deadlineMs: 30_000,
+      embed: (inputs) => {
+        if (configured === "openai-codex") {
+          return codexAccessToken(environment, fetcher).pipe(
+            Effect.flatMap((accessToken) =>
+              openAIEmbed(profile, accessToken, inputs, fetcher, (rejectedAccessToken) =>
+                refreshCodexAccessToken(environment, rejectedAccessToken, fetcher),
+              ),
+            ),
+          );
+        }
+
+        const accessToken = environment.OPENAI_API_KEY;
+
+        return accessToken === undefined || accessToken.length === 0
+          ? Effect.fail(
+              appError("embedding_authentication_failed", "Embedding authentication failed."),
+            )
+          : openAIEmbed(profile, accessToken, inputs, fetcher);
+      },
+    };
+  }
 
   const profile = {
     ...deterministicProfile,

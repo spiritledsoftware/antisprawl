@@ -2,7 +2,7 @@ import type { CanonicalToken, ExtractedSymbol } from "./language.ts";
 
 export const representationVersion = 1;
 
-export const embeddingRepresentationVersion = 1;
+export const embeddingRepresentationVersion = 2;
 
 export interface StructuralRepresentation {
   readonly key: string;
@@ -47,7 +47,12 @@ export const representSymbol = (symbol: ExtractedSymbol): StructuralRepresentati
 
   const strictBytes = pack(strictTokens);
   const normalizedBytes = pack(normalizedTokens);
-  const embeddingInput = `typescript\n${symbol.tokens.map((token) => token.text).join(" ")}`;
+  const symbolName = symbol.qualifiedName.split(".").at(-1);
+  const symbolNameIndex = symbol.tokens.findIndex((token) => token.text === symbolName);
+
+  const embeddingInput = `typescript\n${symbol.tokens
+    .map((token, index) => (index === symbolNameIndex ? "$identifier" : token.text))
+    .join(" ")}`;
 
   return {
     key: symbol.key,

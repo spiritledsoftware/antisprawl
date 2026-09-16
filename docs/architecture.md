@@ -1,6 +1,6 @@
 # Antisprawl Architecture
 
-> **Status:** Accepted design; issues #15 through #17 are implemented
+> **Status:** Accepted design; issues #15 through #18 are implemented
 >
 > **Target release:** `0.1.0`
 >
@@ -39,7 +39,7 @@ Cross-language discovery is an opt-in experiment within one project, not part of
 
 ### Current implementation boundary
 
-Issues #15 through #17 implement the public `index` and `check` commands: Project discovery, embedded verified TypeScript parsing, source-free Structural representations, the SQLite Index, Findings for Symbols changed in the current Edit batch, resumable deterministic embedding batches, and exact semantic search with a native sqlite-vec path and application fallback. The deterministic embedding provider remains private to acceptance tests; public provider configuration is still rejected. Findings are never persisted. Real providers, grammar downloads, watchers, harness adapters, other languages, and release packaging remain later work. Sections describing those capabilities are target architecture, not claims about the current executable.
+Issues #15 through #18 implement the public `index` and `check` commands: Project discovery, embedded verified TypeScript parsing, source-free Structural representations, the SQLite Index, Findings for Symbols changed in the current Edit batch, resumable embedding batches, and exact semantic search with a native sqlite-vec path and application fallback. Projects can explicitly select the fixed `openai` or experimental `openai-codex` provider; omission remains Structural-only. `index --dry-run` previews local work without credentials, Source egress, or Index mutation. The deterministic provider remains private to acceptance tests, and Findings are never persisted. Generic providers, grammar downloads, watchers, harness adapters, other languages, and release packaging remain later work. Sections describing those capabilities are target architecture, not claims about the current executable.
 
 ## 2. Terms
 
@@ -189,7 +189,7 @@ Converts a symbol into the strict token stream, normalized structural stream, q-
 
 ### Embedding module
 
-Owns explicit provider batch limits, input estimation, retries, deadlines, cancellation, credentials, vector dimensions, and content-hash caching. Each bounded chunk calls an internal provider adapter; Antisprawl does not rely on an SDK's implicit batching. OpenAI, OpenAI-compatible, and experimental Codex OAuth implementations remain behind this seam. Structural-only mode does not instantiate an embedding adapter.
+Owns explicit provider batch limits, input estimation, retries, deadlines, cancellation, credentials, vector dimensions, and content-hash caching. Each bounded chunk calls an internal provider adapter; Antisprawl does not rely on an SDK's implicit batching. The private `codex-auth.ts` submodule contains the experimental file-backed OAuth details but remains part of this boundary. OpenAI-compatible providers remain later work. Structural-only mode does not instantiate an embedding adapter.
 
 ### Index module
 
@@ -219,7 +219,7 @@ One `BunRuntime.runMain` entrypoint composes the process Layers. Scopes and fina
 
 Effect `Schema` decodes untrusted configuration, CLI protocol data, provider responses, and persisted provenance. Effectful module interfaces return `Effect` with tagged expected errors. Pure modules accept already-decoded values and do not acquire services or add Effect wrappers.
 
-Unstable Effect CLI and SQL imports stay inside the executable and Index module respectively. Provider HTTP remains inside the Embedding module. These implementation types do not cross the external CLI JSON seam or leak into pure detector modules.
+Unstable Effect CLI and SQL imports stay inside the executable and Index module respectively. Provider HTTP remains inside the Embedding boundary, including its private Codex-auth submodule. These implementation types do not cross the external CLI JSON seam or leak into pure detector modules.
 
 Effect's structured logging and metrics feed the approved local diagnostics and bounded counters. No telemetry exporter is configured by default.
 
@@ -253,7 +253,7 @@ The count uses comment-free canonical tokens so it is deterministic across suppo
 
 Each eligible symbol produces:
 
-1. **Embedding input:** language, signature, and comment-free body, preserving identifiers and literals.
+1. **Embedding input:** language, signature, and comment-free body, preserving identifiers and literals except that representation version 2 replaces the declared Symbol's own name with `$identifier`.
 2. **Structural input:** strict role-aware tokens plus a canonical stream that normalizes local identifiers and literals by category.
 
 The index stores vectors, hashes, token/q-gram fingerprints, metadata, and source ranges. It does not retain raw bodies or embedding inputs.
@@ -287,7 +287,7 @@ Issue #18 adds two fixed providers behind the same internal seam. Both use Bun's
 
 ### OpenAI API-key adapter
 
-`openai` reads `OPENAI_API_KEY` from the process environment and never persists it. Its fixed `text-embedding-3-small` Profile uses the lowest dimension that passes the live 384/1536 acceptance matrix at the versioned semantic threshold.
+`openai` reads `OPENAI_API_KEY` from the process environment and never persists it. Its fixed `text-embedding-3-small` Profile uses 384 dimensions, the lowest dimension that passes the live 384/1536 acceptance matrix at the versioned semantic threshold.
 
 ### Experimental Codex OAuth adapter
 
@@ -303,7 +303,7 @@ Issue #18 adds two fixed providers behind the same internal seam. Both use Bun's
 - never log or expose tokens; and
 - leave the auth file byte-for-byte unchanged when refresh fails.
 
-This OAuth route is not guaranteed by OpenAI's public API contract. It remains experimental and intended for personal development. Keyring-only credentials are unsupported until a documented bridge exists. Its fixed `text-embedding-3-small` Profile is selected independently by the same live 384/1536 matrix.
+This OAuth route is not guaranteed by OpenAI's public API contract. It remains experimental and intended for personal development. Keyring-only credentials are unsupported until a documented bridge exists. Its fixed `text-embedding-3-small` Profile independently selects 384 dimensions through the same live 384/1536 matrix.
 
 An explicit remote `antisprawl index` is Source-egress consent and establishes the completed Profile required for later incremental work. No prompt or `--yes` is required. `check` never starts a missing, full, or changed-Profile backfill. `index --dry-run` reads no credentials, makes no provider call, and does not mutate the Index. Hooks never initiate remote backfills.
 
@@ -327,7 +327,7 @@ The Index uses one canonical ordinary float32 vector BLOB representation for bot
 
 Quantized search requires recall benchmarks before enablement. ANN indexes are a v1 non-goal. LanceDB, USearch, and alternate storage engines are deferred until measured scale requires them.
 
-An interrupted full index commits completed provider batches and aggregate usage, exits `130`, and resumes only missing Embedding-input hashes. Coverage remains partial until Reconciliation completes. Named `check` never backfills unrelated missing vectors and uses Structural-only analysis while its semantic baseline is partial; no-path `check` may reconcile the whole Project.
+An interrupted full index commits completed provider batches and aggregate usage, exits `130`, and resumes only missing Embedding-input hashes. Coverage remains partial until an explicit `index` completes it. No `check` invocation backfills unrelated missing vectors or a missing, changed, or incomplete Profile; it uses Structural-only analysis and directs the user to `index`. With a matching completed Profile, `check` may embed only changed eligible Symbols.
 
 A configuration or schema incompatibility never triggers a surprise rebuild from a hook. The Index becomes stale, and one diagnostic per session asks for an explicit `antisprawl index`. Structural replacement remains atomic. Semantic indexing then makes only complete provider batches durable so interruption leaves a readable, resumable partial Index.
 

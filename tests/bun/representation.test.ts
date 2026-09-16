@@ -20,6 +20,17 @@ const symbol = (identifier: string, literal: string): ExtractedSymbol => ({
   ],
 });
 
+const namedSymbol = (name: string): ExtractedSymbol => ({
+  ...symbol("ready", "1"),
+  qualifiedName: name,
+  tokens: [
+    { type: "function", role: "", text: "function", normalized: "function" },
+    { type: "identifier", role: "name", text: name, normalized: "$identifier" },
+    { type: "identifier", role: "", text: "ready", normalized: "$identifier" },
+    { type: "number", role: "", text: "1", normalized: "$number" },
+  ],
+});
+
 describe("Structural representation", () => {
   it("keeps renames out of normalized fingerprints without storing token text", () => {
     const first = representSymbol(symbol("ready", "1"));
@@ -39,5 +50,14 @@ describe("Structural representation", () => {
     expect(represented.embeddingHash).toBe(
       "2ac9e1f659f7d3daff9a9ef948660be29683d3ecf0cc62e4fd164cbaf51c047c",
     );
+  });
+
+  it("normalizes the declared symbol name without erasing body meaning", () => {
+    const first = representSymbol(namedSymbol("collectReadyJobs"));
+    const renamed = representSymbol(namedSymbol("listEligibleJobs"));
+
+    expect(first.embeddingInput).toBe("typescript\nfunction $identifier ready 1");
+    expect(renamed.embeddingInput).toBe(first.embeddingInput);
+    expect(renamed.embeddingHash).toBe(first.embeddingHash);
   });
 });
