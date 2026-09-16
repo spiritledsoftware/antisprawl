@@ -1,8 +1,11 @@
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { expect, test } from "bun:test";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
+import * as TestClock from "effect/testing/TestClock";
 import {
   applicationCosine,
   configuredEmbeddingProvider,
@@ -13,6 +16,8 @@ import {
 
 const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
   Effect.runPromise(effect.pipe(Effect.provide(BunServices.layer)));
+
+const permissionDenied = "PermissionDenied" as const;
 
 const makeCodexHome = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -235,6 +240,168 @@ test("concurrent Codex batches share one guarded refresh", () =>
         );
 
         expect(refreshes).toBe(1);
+        expect(yield* fs.exists(`${authPath}.antisprawl.lock`)).toBe(false);
+      }),
+    ),
+  ));
+
+test("Codex lock contention honors the embedding deadline without removing the lock", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { fs, root, authPath } = yield* makeCodexHome;
+        const jwt = `header.${Buffer.from('{"exp":0}').toString("base64url")}.signature`;
+        const lockPath = `${authPath}.antisprawl.lock`;
+        let fetches = 0;
+
+        yield* fs.writeFileString(
+          authPath,
+          `{"auth_mode":"chatgpt","tokens":{"access_token":"${jwt}","refresh_token":"refresh","id_token":"${jwt}"}}\n`,
+        );
+        yield* fs.writeFileString(lockPath, "other-process\n");
+
+        const provider = {
+          ...configuredEmbeddingProvider(
+            "openai-codex",
+            { CODEX_HOME: root },
+            // @effect-diagnostics-next-line asyncFunction:off
+            async () => {
+              fetches += 1;
+
+              return new Response(null, { status: 500 });
+            },
+          )!,
+          deadlineMs: 10,
+        };
+
+        const fiber = yield* Effect.flip(
+          runEmbeddingBatch(provider, [
+            { index: 0, hash: "a".repeat(64), input: "typescript function example" },
+          ]),
+        ).pipe(Effect.forkChild);
+
+        yield* TestClock.adjust(10);
+
+        expect(yield* Fiber.join(fiber)).toMatchObject({
+          code: "embedding_timeout",
+          message: "The embedding provider exceeded its deadline.",
+        });
+        expect(fetches).toBe(0);
+        expect(yield* fs.readFileString(lockPath)).toBe("other-process\n");
+      }),
+    ).pipe(Effect.provide(TestClock.layer())),
+  ));
+
+test("non-contention Codex lock failures fail without retrying", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { fs, root, authPath } = yield* makeCodexHome;
+        const jwt = `header.${Buffer.from('{"exp":0}').toString("base64url")}.signature`;
+        const lockPath = `${authPath}.antisprawl.lock`;
+        let lockWrites = 0;
+
+        yield* fs.writeFileString(
+          authPath,
+          `{"auth_mode":"chatgpt","tokens":{"access_token":"${jwt}","refresh_token":"refresh","id_token":"${jwt}"}}\n`,
+        );
+
+        const provider = {
+          ...configuredEmbeddingProvider("openai-codex", { CODEX_HOME: root })!,
+          deadlineMs: 100,
+        };
+
+        const error = yield* Effect.flip(
+          runEmbeddingBatch(provider, [
+            { index: 0, hash: "a".repeat(64), input: "typescript function example" },
+          ]).pipe(
+            Effect.provideService(FileSystem.FileSystem, {
+              ...fs,
+              writeFileString: (path, contents, options) => {
+                if (path !== lockPath) return fs.writeFileString(path, contents, options);
+
+                lockWrites += 1;
+
+                return Effect.fail(
+                  new PlatformError.PlatformError(
+                    new PlatformError.SystemError({
+                      _tag: permissionDenied,
+                      module: "FileSystem",
+                      method: "writeFileString",
+                      pathOrDescriptor: path,
+                    }),
+                  ),
+                );
+              },
+            }),
+          ),
+        );
+
+        expect(error).toMatchObject({ code: "embedding_refresh_failed" });
+        expect(lockWrites).toBe(1);
+      }),
+    ),
+  ));
+
+test("Codex lock cleanup failures become refresh failures", () =>
+  run(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { fs, root, authPath } = yield* makeCodexHome;
+        const jwt = `header.${Buffer.from('{"exp":0}').toString("base64url")}.signature`;
+        const lockPath = `${authPath}.antisprawl.lock`;
+        const vector = Array.from({ length: 384 }, (_, index) => (index === 0 ? 1 : 0));
+        let refreshes = 0;
+
+        yield* fs.writeFileString(
+          authPath,
+          `{"auth_mode":"chatgpt","tokens":{"access_token":"${jwt}","refresh_token":"refresh","id_token":"${jwt}"}}\n`,
+        );
+
+        // @effect-diagnostics-next-line asyncFunction:off
+        const fetcher = async (input: string) => {
+          if (input === "https://auth.openai.com/oauth/token") {
+            refreshes += 1;
+
+            return Response.json({ access_token: "new-access" });
+          }
+
+          return Response.json({
+            object: "list",
+            data: [{ object: "embedding", index: 0, embedding: vector }],
+            model: "text-embedding-3-small",
+            usage: { prompt_tokens: 3, total_tokens: 3 },
+          });
+        };
+
+        const provider = configuredEmbeddingProvider("openai-codex", { CODEX_HOME: root }, fetcher);
+
+        const error = yield* Effect.flip(
+          runEmbeddingBatch(provider!, [
+            { index: 0, hash: "a".repeat(64), input: "typescript function example" },
+          ]).pipe(
+            Effect.provideService(FileSystem.FileSystem, {
+              ...fs,
+              remove: (path, options) =>
+                path === lockPath
+                  ? Effect.fail(
+                      new PlatformError.PlatformError(
+                        new PlatformError.SystemError({
+                          _tag: permissionDenied,
+                          module: "FileSystem",
+                          method: "remove",
+                          pathOrDescriptor: path,
+                        }),
+                      ),
+                    )
+                  : fs.remove(path, options),
+            }),
+          ),
+        );
+
+        expect(error).toMatchObject({ code: "embedding_refresh_failed" });
+        expect(refreshes).toBe(1);
+        expect(yield* fs.exists(lockPath)).toBe(true);
       }),
     ),
   ));

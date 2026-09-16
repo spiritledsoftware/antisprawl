@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { appError, type AppError } from "./errors.ts";
 
@@ -117,12 +118,16 @@ const acquireLock = Effect.fn("CodexAuth.acquireLock")(function* (path: string) 
       .writeFileString(path, `${process.pid}\n`, { flag: "wx", mode: 0o600 })
       .pipe(
         Effect.as(true),
-        Effect.orElseSucceed(() => false),
+        Effect.catchTag("PlatformError", (error) =>
+          Predicate.isTagged(error.reason, "AlreadyExists")
+            ? Effect.succeed(false)
+            : Effect.fail(refreshFailure()),
+        ),
       );
 
     if (acquired) return;
 
-    yield* Effect.sleep(50);
+    yield* Effect.interruptible(Effect.sleep(50));
   }
 });
 
@@ -130,7 +135,7 @@ const releaseLock = (path: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
 
-    yield* fs.remove(path, { force: true }).pipe(Effect.ignore);
+    yield* fs.remove(path, { force: true }).pipe(Effect.mapError(() => refreshFailure()));
   });
 
 const encodeAuth = Effect.fn("CodexAuth.encode")(function* (
