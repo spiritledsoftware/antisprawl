@@ -38,7 +38,7 @@ export interface EmbeddingRequest {
 }
 
 const ProviderVector = Schema.Struct({
-  index: Schema.Int,
+  index: Schema.Natural,
   hash: Schema.String,
   // Non-finite values are decoded so they retain the public typed failure below.
   // @effect-diagnostics-next-line schemaNumber:off
@@ -57,8 +57,8 @@ export interface EmbeddingUsage {
 const ProviderResponse = Schema.Struct({
   vectors: Schema.Array(ProviderVector),
   usage: Schema.Struct({
-    inputTokens: Schema.Finite,
-    durationMs: Schema.Finite,
+    inputTokens: Schema.Natural,
+    durationMs: Schema.Natural,
   }),
 });
 
@@ -88,19 +88,24 @@ export const embeddingIdentityHash = (identity: EmbeddingIdentity): string =>
     "hex",
   );
 
+const OpenAIUsage = Schema.Struct({
+  prompt_tokens: Schema.Natural,
+  total_tokens: Schema.Natural,
+}).check(Schema.makeFilter((usage) => usage.total_tokens >= usage.prompt_tokens));
+
 const OpenAIResponse = Schema.Struct({
   object: Schema.Literal("list"),
   data: Schema.Array(
     Schema.Struct({
       object: Schema.Literal("embedding"),
-      index: Schema.Int,
+      index: Schema.Natural,
       // Decoded here so runEmbeddingBatch retains the typed non-finite-vector failure.
       // @effect-diagnostics-next-line schemaNumber:off
       embedding: Schema.Array(Schema.Number),
     }),
   ),
   model: Schema.String,
-  usage: Schema.Struct({ prompt_tokens: Schema.Finite, total_tokens: Schema.Finite }),
+  usage: OpenAIUsage,
 });
 
 const openAIEmbed = Effect.fn("Embedding.openAIEmbed")(function* (
@@ -165,11 +170,7 @@ const openAIEmbed = Effect.fn("Embedding.openAIEmbed")(function* (
     ),
   );
 
-  if (
-    decoded.model !== profile.model ||
-    decoded.usage.prompt_tokens < 0 ||
-    decoded.usage.total_tokens < decoded.usage.prompt_tokens
-  ) {
+  if (decoded.model !== profile.model) {
     return yield* appError(
       "embedding_response_invalid",
       "The embedding provider returned invalid data.",
@@ -342,13 +343,6 @@ export const runEmbeddingBatch = Effect.fn("Embedding.runBatch")(function* (
         : appError("embedding_response_invalid", "The embedding provider returned invalid data."),
     ),
   );
-
-  if (response.usage.inputTokens < 0 || response.usage.durationMs < 0) {
-    return yield* appError(
-      "embedding_response_invalid",
-      "The embedding provider returned invalid usage data.",
-    );
-  }
 
   if (response.vectors.length !== inputs.length) {
     return yield* appError(
