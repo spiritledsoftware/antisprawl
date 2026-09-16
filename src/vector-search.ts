@@ -15,6 +15,58 @@ const ProbeRow = Schema.Struct({ version: Schema.Literal(version), distance: Sch
 
 const CandidateRows = Schema.Array(Schema.Struct({ input_hash: Schema.String }));
 
+const float32UnitRoundoff = 2 ** -24;
+
+const float64UnitRoundoff = 2 ** -53;
+
+const float32Maximum = 3.402_823_466_385_288_6e38;
+
+const float32MinimumNormalRoot = 2 ** -63;
+
+const validNativeDimensions = (dimensions: number) =>
+  dimensions > 0 && 4 * dimensions * float32UnitRoundoff < 1;
+
+const maximumNativeDistance = (minimumSimilarity: number, dimensions: number) => {
+  const accumulationError =
+    (4 * dimensions * float32UnitRoundoff) / (1 - 4 * dimensions * float32UnitRoundoff);
+
+  const cosineError =
+    accumulationError +
+    float32UnitRoundoff * (2 + accumulationError) +
+    16 * dimensions * float64UnitRoundoff;
+
+  return Math.min(2, 1 - minimumSimilarity + cosineError);
+};
+
+export const nativeCosineSafe = (vectors: Iterable<Float32Array>, dimensions: number): boolean => {
+  if (!validNativeDimensions(dimensions)) return false;
+
+  const maximumComponent = Math.sqrt(float32Maximum / (2 * dimensions));
+
+  for (const vector of vectors) {
+    if (vector.length !== dimensions) return false;
+
+    let nonzero = false;
+
+    for (const value of vector) {
+      const absolute = Math.abs(value);
+
+      if (
+        !Number.isFinite(value) ||
+        (absolute !== 0 && (absolute < float32MinimumNormalRoot || absolute > maximumComponent))
+      ) {
+        return false;
+      }
+
+      nonzero ||= absolute !== 0;
+    }
+
+    if (!nonzero) return false;
+  }
+
+  return true;
+};
+
 const safeError = () =>
   appError("vector_search_unavailable", "Native vector search is unavailable.");
 
@@ -78,19 +130,21 @@ export const searchNativeCandidates = Effect.fn("VectorSearch.searchNativeCandid
   queryVector: Uint8Array,
   dimensions: number,
   environment: Readonly<Record<string, string | undefined>> = Bun.env,
-  maximumDistance = 2,
+  minimumSimilarity = -1,
 ) {
   const search = Effect.gen(function* () {
     if (
       queryVector.byteLength !== dimensions * 4 ||
-      dimensions <= 0 ||
-      !Number.isFinite(maximumDistance) ||
-      maximumDistance < 0
+      !validNativeDimensions(dimensions) ||
+      !Number.isFinite(minimumSimilarity) ||
+      minimumSimilarity < -1 ||
+      minimumSimilarity > 1
     ) {
       return yield* safeError();
     }
 
     const library = yield* extractedLibrary(environment);
+    const maximumDistance = maximumNativeDistance(minimumSimilarity, dimensions);
 
     const queried = yield* Effect.try({
       try: () => {

@@ -10,7 +10,6 @@ import {
   type IndexedSymbol,
 } from "./detector.ts";
 import {
-  applicationCosine,
   configuredEmbeddingProvider,
   embeddingBatchSize,
   encodeVector,
@@ -23,6 +22,7 @@ import { AppError, appError } from "./errors.ts";
 import {
   embeddingIdentityHash,
   indexSchemaVersion,
+  nativeCosineSafe,
   profileMatches,
   readIndex,
   readIndexForBaseline,
@@ -459,15 +459,19 @@ const outputWork = (structural: IndexWork, embedding: EmbeddingWork): CommandWor
   vectors: embedding.vectors,
 });
 
-const nativeSearch = Effect.fn("App.nativeSearch")(function* (
-  context: Context,
-  snapshot: IndexSnapshot,
+export const nativeSearch = Effect.fn("App.nativeSearch")(function* (
+  context: Pick<Context, "indexPath" | "provider">,
+  snapshot: Pick<IndexSnapshot, "profile" | "vectors">,
   querySymbols: ReadonlyArray<IndexedSymbol>,
 ) {
   const provider = context.provider;
   const profile = snapshot.profile;
 
   if (provider === undefined || profile === undefined) {
+    return { path: "application_exact" as const };
+  }
+
+  if (!nativeCosineSafe(snapshot.vectors.values(), provider.profile.dimensions)) {
     return { path: "application_exact" as const };
   }
 
@@ -495,7 +499,7 @@ const nativeSearch = Effect.fn("App.nativeSearch")(function* (
       encodeVector([...vector]),
       provider.profile.dimensions,
       Bun.env,
-      1 - provider.profile.semanticThreshold + 0.000_001,
+      provider.profile.semanticThreshold,
     ).pipe(
       Effect.match({
         onFailure: () => undefined,
@@ -505,17 +509,7 @@ const nativeSearch = Effect.fn("App.nativeSearch")(function* (
 
     if (result === undefined) return { path: "application_exact" as const };
 
-    const expected = new Set(
-      [...snapshot.vectors].flatMap(([hash, candidate]) =>
-        applicationCosine(vector, candidate) >= provider.profile.semanticThreshold ? [hash] : [],
-      ),
-    );
-
-    const candidates = new Set(result.filter((hash) => expected.has(hash)));
-
-    if (candidates.size !== expected.size) return { path: "application_exact" as const };
-
-    if (symbol !== undefined) candidateHashesByQuery.set(symbol.embeddingHash, candidates);
+    if (symbol !== undefined) candidateHashesByQuery.set(symbol.embeddingHash, new Set(result));
   }
 
   return { path: "sqlite_vec" as const, candidateHashesByQuery };

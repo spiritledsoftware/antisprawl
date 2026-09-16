@@ -57,6 +57,7 @@ export interface DetectorResult {
     readonly path?: string;
   }>;
   readonly comparisons: number;
+  readonly rescored: number;
 }
 
 const identity = (symbol: IndexedSymbol) => `${symbol.path}\0${symbol.qualifiedName}`;
@@ -176,6 +177,7 @@ export const detectProbableDuplicates = (
   }));
 
   let comparisons = 0;
+  let rescored = 0;
 
   for (const changed of candidates) {
     if (!editedIds.has(identity(changed))) continue;
@@ -239,6 +241,7 @@ export const detectProbableDuplicates = (
         if (changedVector === undefined || candidateVector === undefined) continue;
 
         cosineSimilarity = applicationCosine(changedVector, candidateVector);
+        rescored += 1;
 
         if (cosineSimilarity < semantic.threshold) continue;
       }
@@ -295,5 +298,6 @@ export const detectProbableDuplicates = (
       ).values(),
     ].sort((left, right) => compareText(left.path ?? "", right.path ?? "")),
     comparisons,
+    rescored,
   };
 };

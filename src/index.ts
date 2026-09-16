@@ -20,7 +20,10 @@ import { representationVersion } from "./representation.ts";
 
 export { embeddingIdentityHash };
 
-export { searchNativeCandidates as searchVectorCandidates } from "./vector-search.ts";
+export {
+  nativeCosineSafe,
+  searchNativeCandidates as searchVectorCandidates,
+} from "./vector-search.ts";
 
 export const indexSchemaVersion = 3;
 

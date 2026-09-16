@@ -562,6 +562,36 @@ export const verifySemanticCheck = Effect.fn("Acceptance.verifySemanticCheck")(f
     expect(fallbackCore.findings[0]?.id, failure).toBe(checkedCore.findings[0]?.id);
   }
 
+  const { projectRoot: unsafeRoot, environment: unsafeEnvironment } = yield* createSemanticProject(
+    "antisprawl-semantic-unsafe-native-",
+  );
+
+  expect(runCommand(unsafeRoot, ["index"], unsafeEnvironment).exitCode).toBe(0);
+
+  const unsafeIndex = new Database(paths.join(unsafeRoot, ".antisprawl/index.sqlite"));
+
+  unsafeIndex
+    .query("update vectors set vector = ?")
+    .run(new Uint8Array(new Float32Array([1e19, 0]).buffer));
+  unsafeIndex.close();
+
+  yield* fs.writeFileString(
+    paths.join(unsafeRoot, "src/edit.ts"),
+    structuralCheckScenario.renamedCopy,
+  );
+
+  const unsafeFallback = runCommand(unsafeRoot, ["check", "src/edit.ts"], unsafeEnvironment);
+  const unsafeFallbackOutput = yield* Schema.decodeEffect(Json)(unsafeFallback.stdout);
+
+  expect({ exitCode: unsafeFallback.exitCode, stderr: unsafeFallback.stderr }).toEqual({
+    exitCode: 0,
+    stderr: "warning[vector_search_fallback]\n",
+  });
+  expect(unsafeFallbackOutput).toMatchObject({
+    analysis: { mode: "semantic", vectorSearch: "application_exact" },
+    findings: [{ semanticEvidence: { cosineSimilarity: 1 } }],
+  });
+
   for (const edit of structuralCheckScenario.edits.slice(1)) {
     const { projectRoot: isolatedRoot, environment: isolatedEnvironment } =
       yield* createSemanticProject("antisprawl-semantic-case-");
