@@ -4,10 +4,6 @@ After a successful Pi `edit` or `write`, run `antisprawl check` on that path and
 
 ## Manual smoke
 
-From this repo, in a Project that already has an Index:
+This repo loads the extension from `.pi/settings.json`. Trust the project if Pi asks, run `antisprawl index` if there is no Index, then `pi` and edit a TypeScript source file.
 
-```
-pi -e ./packages/pi/src/extension.ts
-```
-
-Edit a TypeScript source file. The original tool result stays; Findings, if any, append after it.
+Or: `pi -e ./packages/pi/src/extension.ts`
