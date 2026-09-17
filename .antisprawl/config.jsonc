@@ -2,7 +2,7 @@
   "version": 1,
   "embedding": { "provider": "openai" },
   "sources": {
-    "include": ["src/**/*.ts"],
+    "include": ["packages/*/src/**/*.ts"],
     "exclude": [],
   },
 }
