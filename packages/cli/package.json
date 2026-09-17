@@ -1,11 +1,9 @@
 {
   "name": "antisprawl",
   "version": "0.0.0",
+  "private": true,
   "description": "Keep your agent from writing spaghetti code.",
   "type": "module",
-  "publishConfig": {
-    "access": "public"
-  },
   "scripts": {
     "build": "bun build --compile src/main.ts --outfile dist/antisprawl"
   },
