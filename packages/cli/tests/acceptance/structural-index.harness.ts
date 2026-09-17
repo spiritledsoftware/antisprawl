@@ -4,39 +4,15 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import { CommandOutput, ProtocolJson } from "../../src/protocol.ts";
 import { structuralCheckScenario } from "./structural-check.scenario.ts";
 import { structuralIndexScenario } from "./structural-index.scenario.ts";
 
-const Json = Schema.fromJsonString(Schema.Unknown);
+const Json = ProtocolJson;
 
-const CheckOutput = Schema.fromJsonString(
-  Schema.Struct({
-    coverage: Schema.Struct({
-      status: Schema.String,
-      files: Schema.Struct({ total: Schema.Int, current: Schema.Int, failed: Schema.Int }),
-    }),
-    work: Schema.Struct({
-      files: Schema.Struct({ indexed: Schema.Int, reused: Schema.Int, removed: Schema.Int }),
-      symbols: Schema.Struct({ indexed: Schema.Int, reused: Schema.Int, removed: Schema.Int }),
-      vectors: Schema.Struct({ indexed: Schema.Int, reused: Schema.Int, removed: Schema.Int }),
-    }),
-    diagnostics: Schema.Array(
-      Schema.Struct({
-        severity: Schema.String,
-        code: Schema.String,
-        path: Schema.optionalKey(Schema.String),
-        message: Schema.optionalKey(Schema.String),
-      }),
-    ),
-    findings: Schema.Array(
-      Schema.Struct({
-        id: Schema.String,
-        edited: Schema.Struct({ path: Schema.String, qualifiedName: Schema.String }),
-        candidate: Schema.Struct({ path: Schema.String, qualifiedName: Schema.String }),
-      }),
-    ),
-  }),
-);
+const JsonUnknown = Schema.fromJsonString(Schema.Unknown);
+
+const CheckOutput = Schema.fromJsonString(CommandOutput);
 
 export interface CommandResult {
   readonly exitCode: number;
@@ -199,9 +175,11 @@ export const verifyStructuralIndex = Effect.fn("Acceptance.verifyStructuralIndex
     stderr: "",
   });
 
-  const firstOutput = yield* Schema.decodeEffect(Json)(first.stdout);
+  yield* Schema.decodeEffect(Json)(first.stdout);
 
-  expect(firstOutput).toEqual(structuralIndexScenario.firstOutput);
+  expect(yield* Schema.decodeEffect(JsonUnknown)(first.stdout)).toEqual(
+    structuralIndexScenario.firstOutput,
+  );
 
   const indexPath = paths.join(projectRoot, ".antisprawl/index.sqlite");
   const index = new Database(indexPath, { readonly: true });
@@ -254,7 +232,9 @@ export const verifyStructuralIndex = Effect.fn("Acceptance.verifyStructuralIndex
     exitCode: 0,
     stderr: "",
   });
-  expect(yield* Schema.decodeEffect(Json)(second.stdout)).toEqual({
+  yield* Schema.decodeEffect(Json)(second.stdout);
+
+  expect(yield* Schema.decodeEffect(JsonUnknown)(second.stdout)).toEqual({
     ...structuralIndexScenario.firstOutput,
     work: {
       files: { indexed: 0, reused: 1, removed: 0 },

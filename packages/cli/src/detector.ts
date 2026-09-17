@@ -1,5 +1,8 @@
 import { applicationCosine } from "./embedding.ts";
+import type { Finding } from "./protocol.ts";
 import type { StructuralRepresentation } from "./representation.ts";
+
+export type { Finding };
 
 export const detectorVersion = 2;
 
@@ -16,31 +19,13 @@ export interface IndexedSymbol extends StructuralRepresentation {
   readonly language: "typescript";
 }
 
-export interface FindingLocation {
+interface FindingLocation {
   readonly path: string;
   readonly qualifiedName: string;
   readonly range: {
     readonly start: { readonly line: number; readonly column: number };
     readonly end: { readonly line: number; readonly column: number };
   };
-}
-
-export interface Finding {
-  readonly id: string;
-  readonly type: "probable_duplicate";
-  readonly language: "typescript";
-  readonly edited: FindingLocation;
-  readonly candidate: FindingLocation;
-  readonly structuralEvidence: {
-    readonly strictHashEqual: boolean;
-    readonly normalizedHashEqual: boolean;
-    readonly qgramSimilarity: number;
-    readonly orderedTokenSimilarity: number;
-  };
-  readonly semanticEvidence?: {
-    readonly cosineSimilarity: number;
-  };
-  readonly guidance: string;
 }
 
 export interface SemanticAnalysis {

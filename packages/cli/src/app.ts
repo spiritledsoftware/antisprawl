@@ -6,7 +6,6 @@ import {
   detectProbableDuplicates,
   detectorVersion,
   structuralPolicy,
-  type Finding,
   type IndexedSymbol,
 } from "./detector.ts";
 import {
@@ -38,12 +37,7 @@ import {
   type IndexSnapshot,
   type IndexWork,
 } from "./index.ts";
-import {
-  loadBundledTypeScriptGrammar,
-  parseTypeScript,
-  type GrammarProvenance,
-  type ResolvedGrammar,
-} from "./language.ts";
+import { loadBundledTypeScriptGrammar, parseTypeScript, type ResolvedGrammar } from "./language.ts";
 import {
   discoverSourcePaths,
   resolveNamedSourcePaths,
@@ -51,20 +45,12 @@ import {
   type Diagnostic,
   type Project,
 } from "./project.ts";
+import type { CommandOutput, Coverage, DryRunOutput } from "./protocol.ts";
 import {
   representationVersion,
   representSymbol,
   type StructuralRepresentation,
 } from "./representation.ts";
-
-interface Coverage {
-  readonly status: "complete" | "partial" | "degraded";
-  readonly files: {
-    readonly total: number;
-    readonly current: number;
-    readonly failed: number;
-  };
-}
 
 interface VectorWork {
   readonly indexed: number;
@@ -74,58 +60,6 @@ interface VectorWork {
 
 interface CommandWork extends IndexWork {
   readonly vectors: VectorWork;
-}
-
-interface ProfileProvenance {
-  readonly provider: string;
-  readonly model: string;
-  readonly dimensions: number;
-  readonly language: "typescript";
-  readonly embeddingRepresentation: number;
-  readonly detector: number;
-  readonly semanticThreshold: number;
-  readonly calibration: "calibrated" | "uncalibrated";
-}
-
-interface Provenance {
-  readonly bun: string;
-  readonly indexSchema: number;
-  readonly representation: number;
-  readonly grammar: GrammarProvenance;
-  readonly detector: number;
-  readonly structuralPolicy: typeof structuralPolicy;
-  readonly profile?: ProfileProvenance;
-}
-
-interface Analysis {
-  readonly mode: "structural_only" | "semantic";
-  readonly vectorSearch?: "application_exact" | "sqlite_vec";
-}
-
-interface CommandOutput {
-  readonly protocolVersion: 1;
-  readonly command: "index" | "check";
-  readonly analysis: Analysis;
-  readonly coverage: Coverage;
-  readonly work: CommandWork;
-  readonly usage?: { readonly embedding: EmbeddingUsage };
-  readonly provenance: Provenance;
-  readonly diagnostics: ReadonlyArray<Diagnostic>;
-  readonly findings: ReadonlyArray<Finding>;
-}
-
-interface DryRunOutput {
-  readonly protocolVersion: 1;
-  readonly command: "index";
-  readonly dryRun: true;
-  readonly profile?: ProfileProvenance;
-  readonly preview: {
-    readonly files: number;
-    readonly eligibleSymbols: number;
-    readonly inputBytes: number;
-    readonly vectors: { readonly required: number; readonly reused: number };
-  };
-  readonly diagnostics: ReadonlyArray<Diagnostic>;
 }
 
 interface Context {
@@ -164,7 +98,7 @@ const loadContext = Effect.fn("App.loadContext")(function* (startingDirectory: s
   } satisfies Context;
 });
 
-const profileProvenance = (profile: Profile): ProfileProvenance => ({
+const profileProvenance = (profile: Profile) => ({
   provider: profile.provider,
   model: profile.model,
   dimensions: profile.dimensions,
@@ -175,7 +109,7 @@ const profileProvenance = (profile: Profile): ProfileProvenance => ({
   calibration: profile.calibration,
 });
 
-const provenance = (context: Context): Provenance => ({
+const provenance = (context: Context) => ({
   bun: process.versions.bun,
   indexSchema: indexSchemaVersion,
   representation: representationVersion,
@@ -521,7 +455,8 @@ export const nativeSearch = Effect.fn("App.nativeSearch")(function* (
 const semanticAnalysis = (
   semantic: boolean,
   vectorSearch: "application_exact" | "sqlite_vec" = "application_exact",
-): Analysis => (semantic ? { mode: "semantic", vectorSearch } : { mode: "structural_only" });
+) =>
+  semantic ? { mode: "semantic" as const, vectorSearch } : { mode: "structural_only" as const };
 
 export const indexProject = Effect.fn("App.indexProject")(function* (startingDirectory: string) {
   const context = yield* loadContext(startingDirectory);
