@@ -8,10 +8,6 @@ import { CommandOutput, ProtocolJson } from "../../src/protocol.ts";
 import { structuralCheckScenario } from "./structural-check.scenario.ts";
 import { structuralIndexScenario } from "./structural-index.scenario.ts";
 
-const Json = ProtocolJson;
-
-const JsonUnknown = Schema.fromJsonString(Schema.Unknown);
-
 const CheckOutput = Schema.fromJsonString(CommandOutput);
 
 export interface CommandResult {
@@ -102,7 +98,7 @@ export const verifyProviderDryRun = Effect.fn("Acceptance.verifyProviderDryRun")
       exitCode: 0,
       stderr: "",
     });
-    expect(yield* Schema.decodeEffect(Json)(result.stdout), provider).toMatchObject({
+    expect(yield* Schema.decodeEffect(ProtocolJson)(result.stdout), provider).toMatchObject({
       protocolVersion: 1,
       command: "index",
       dryRun: true,
@@ -175,9 +171,7 @@ export const verifyStructuralIndex = Effect.fn("Acceptance.verifyStructuralIndex
     stderr: "",
   });
 
-  yield* Schema.decodeEffect(Json)(first.stdout);
-
-  expect(yield* Schema.decodeEffect(JsonUnknown)(first.stdout)).toEqual(
+  expect(yield* Schema.decodeEffect(ProtocolJson)(first.stdout)).toMatchObject(
     structuralIndexScenario.firstOutput,
   );
 
@@ -232,9 +226,7 @@ export const verifyStructuralIndex = Effect.fn("Acceptance.verifyStructuralIndex
     exitCode: 0,
     stderr: "",
   });
-  yield* Schema.decodeEffect(Json)(second.stdout);
-
-  expect(yield* Schema.decodeEffect(JsonUnknown)(second.stdout)).toEqual({
+  expect(yield* Schema.decodeEffect(ProtocolJson)(second.stdout)).toMatchObject({
     ...structuralIndexScenario.firstOutput,
     work: {
       files: { indexed: 0, reused: 1, removed: 0 },
@@ -266,7 +258,7 @@ export const verifyStructuralCheck = Effect.fn("Acceptance.verifyStructuralCheck
       stderr: "",
     });
 
-    const output = yield* Schema.decodeEffect(Json)(checked.stdout);
+    const output = yield* Schema.decodeEffect(ProtocolJson)(checked.stdout);
 
     expect(output, edit.name).toMatchObject({
       protocolVersion: 1,
@@ -346,7 +338,7 @@ export const verifyLiveOpenAIProfile = Effect.fn("Acceptance.verifyLiveOpenAIPro
       exitCode: 0,
       stderr: "",
     });
-    expect(yield* Schema.decodeEffect(Json)(indexed.stdout), edit.name).toMatchObject({
+    expect(yield* Schema.decodeEffect(ProtocolJson)(indexed.stdout), edit.name).toMatchObject({
       analysis: { mode: "semantic", vectorSearch: "sqlite_vec" },
       coverage: { status: "complete" },
       usage: {
@@ -374,14 +366,13 @@ export const verifyLiveOpenAIProfile = Effect.fn("Acceptance.verifyLiveOpenAIPro
     yield* fs.writeFileString(paths.join(projectRoot, "src/edit.ts"), edit.source);
 
     const checked = runCommand(projectRoot, ["check", "src/edit.ts"], environment);
-    const output = yield* Schema.decodeEffect(Json)(checked.stdout);
     const core = yield* Schema.decodeEffect(CheckOutput)(checked.stdout);
 
     expect({ exitCode: checked.exitCode, stderr: checked.stderr }, edit.name).toEqual({
       exitCode: 0,
       stderr: "",
     });
-    expect(output, edit.name).toMatchObject({
+    expect(core, edit.name).toMatchObject({
       analysis: { mode: "semantic", vectorSearch: "sqlite_vec" },
       coverage: { status: "complete" },
       provenance: {
@@ -399,7 +390,7 @@ export const verifyLiveOpenAIProfile = Effect.fn("Acceptance.verifyLiveOpenAIPro
     });
 
     if (edit.name !== "tiny wrapper") {
-      expect(output, edit.name).toMatchObject({
+      expect(core, edit.name).toMatchObject({
         usage: {
           embedding: {
             requests: 1,
@@ -438,7 +429,7 @@ export const verifySemanticCheck = Effect.fn("Acceptance.verifySemanticCheck")(f
     exitCode: 0,
     stderr: "",
   });
-  expect(yield* Schema.decodeEffect(Json)(indexed.stdout)).toMatchObject({
+  expect(yield* Schema.decodeEffect(ProtocolJson)(indexed.stdout)).toMatchObject({
     protocolVersion: 1,
     command: "index",
     analysis: { mode: "semantic", vectorSearch: "sqlite_vec" },
@@ -490,10 +481,9 @@ export const verifySemanticCheck = Effect.fn("Acceptance.verifySemanticCheck")(f
     exitCode: 0,
     stderr: "",
   });
-  const checkedOutput = yield* Schema.decodeEffect(Json)(checked.stdout);
   const checkedCore = yield* Schema.decodeEffect(CheckOutput)(checked.stdout);
 
-  expect(checkedOutput).toMatchObject({
+  expect(checkedCore).toMatchObject({
     protocolVersion: 1,
     command: "check",
     analysis: { mode: "semantic", vectorSearch: "sqlite_vec" },
@@ -528,12 +518,11 @@ export const verifySemanticCheck = Effect.fn("Acceptance.verifySemanticCheck")(f
       ANTISPRAW_ACCEPTANCE_VECTOR_SEARCH_FAILURE: failure,
     });
 
-    const fallbackOutput = yield* Schema.decodeEffect(Json)(fallback.stdout);
     const fallbackCore = yield* Schema.decodeEffect(CheckOutput)(fallback.stdout);
 
     expect(fallback.exitCode, failure).toBe(0);
     expect(fallback.stderr, failure).toBe("warning[vector_search_fallback]\n");
-    expect(fallbackOutput, failure).toMatchObject({
+    expect(fallbackCore, failure).toMatchObject({
       analysis: { mode: "semantic", vectorSearch: "application_exact" },
       coverage: { status: "complete" },
       diagnostics: [{ severity: "warning", code: "vector_search_fallback" }],
@@ -561,7 +550,7 @@ export const verifySemanticCheck = Effect.fn("Acceptance.verifySemanticCheck")(f
   );
 
   const unsafeFallback = runCommand(unsafeRoot, ["check", "src/edit.ts"], unsafeEnvironment);
-  const unsafeFallbackOutput = yield* Schema.decodeEffect(Json)(unsafeFallback.stdout);
+  const unsafeFallbackOutput = yield* Schema.decodeEffect(ProtocolJson)(unsafeFallback.stdout);
 
   expect({ exitCode: unsafeFallback.exitCode, stderr: unsafeFallback.stderr }).toEqual({
     exitCode: 0,
@@ -580,14 +569,13 @@ export const verifySemanticCheck = Effect.fn("Acceptance.verifySemanticCheck")(f
     yield* fs.writeFileString(paths.join(isolatedRoot, "src/edit.ts"), edit.source);
 
     const result = runCommand(isolatedRoot, ["check", "src/edit.ts"], isolatedEnvironment);
-    const output = yield* Schema.decodeEffect(Json)(result.stdout);
     const core = yield* Schema.decodeEffect(CheckOutput)(result.stdout);
 
     expect({ exitCode: result.exitCode, stderr: result.stderr }, edit.name).toEqual({
       exitCode: 0,
       stderr: "",
     });
-    expect(output, edit.name).toMatchObject({
+    expect(core, edit.name).toMatchObject({
       analysis: { mode: "semantic", vectorSearch: "sqlite_vec" },
       coverage: { status: "complete" },
       findings:
@@ -613,14 +601,13 @@ export const verifySemanticCheck = Effect.fn("Acceptance.verifySemanticCheck")(f
       ANTISPRAW_ACCEPTANCE_VECTOR_SEARCH_FAILURE: "probe",
     });
 
-    const fallbackOutput = yield* Schema.decodeEffect(Json)(fallback.stdout);
     const fallbackCore = yield* Schema.decodeEffect(CheckOutput)(fallback.stdout);
 
     expect({ exitCode: fallback.exitCode, stderr: fallback.stderr }, edit.name).toEqual({
       exitCode: 0,
       stderr: "warning[vector_search_fallback]\n",
     });
-    expect(fallbackOutput, edit.name).toMatchObject({
+    expect(fallbackCore, edit.name).toMatchObject({
       analysis: { mode: "semantic", vectorSearch: "application_exact" },
     });
     expect(fallbackCore.coverage, edit.name).toEqual(core.coverage);
@@ -649,7 +636,7 @@ export const verifySemanticCheck = Effect.fn("Acceptance.verifySemanticCheck")(f
     stderr: "warning[semantic_index_partial]: Run antisprawl index.\n",
   });
   expect(yield* fs.exists(identityTrace)).toBe(false);
-  expect(yield* Schema.decodeEffect(Json)(changedProfile.stdout)).toMatchObject({
+  expect(yield* Schema.decodeEffect(ProtocolJson)(changedProfile.stdout)).toMatchObject({
     analysis: { mode: "structural_only" },
     coverage: { status: "partial" },
   });
@@ -662,7 +649,7 @@ export const verifySemanticCheck = Effect.fn("Acceptance.verifySemanticCheck")(f
   };
 
   const checkedIdentity = runCommand(identityRoot, ["check"], changedIdentityEnvironment);
-  const checkedIdentityOutput = yield* Schema.decodeEffect(Json)(checkedIdentity.stdout);
+  const checkedIdentityOutput = yield* Schema.decodeEffect(ProtocolJson)(checkedIdentity.stdout);
 
   expect({ exitCode: checkedIdentity.exitCode, stderr: checkedIdentity.stderr }).toEqual({
     exitCode: 0,
@@ -677,7 +664,7 @@ export const verifySemanticCheck = Effect.fn("Acceptance.verifySemanticCheck")(f
   });
 
   const reconciled = runCommand(identityRoot, ["index"], changedIdentityEnvironment);
-  const reconciledOutput = yield* Schema.decodeEffect(Json)(reconciled.stdout);
+  const reconciledOutput = yield* Schema.decodeEffect(ProtocolJson)(reconciled.stdout);
 
   expect({ exitCode: reconciled.exitCode, stderr: reconciled.stderr }).toEqual({
     exitCode: 0,
@@ -735,7 +722,7 @@ export const verifyEmbeddingFailures = Effect.fn("Acceptance.verifyEmbeddingFail
     );
 
     const checked = runCommand(projectRoot, ["check", "src/edit.ts"], environment);
-    const output = yield* Schema.decodeEffect(Json)(checked.stdout);
+    const output = yield* Schema.decodeEffect(ProtocolJson)(checked.stdout);
 
     expect(checked.exitCode, failure).toBe(0);
     expect(checked.stderr, failure).toBe(`warning[${code}]\n`);
@@ -820,7 +807,7 @@ export const verifySemanticInterruption = Effect.fn("Acceptance.verifySemanticIn
       XDG_CACHE_HOME: paths.join(projectRoot, ".cache"),
     });
 
-    const resumedOutput = yield* Schema.decodeEffect(Json)(resumed.stdout);
+    const resumedOutput = yield* Schema.decodeEffect(ProtocolJson)(resumed.stdout);
 
     expect(resumed.exitCode).toBe(0);
     expect((yield* fs.readFileString(tracePath)).trim().split("\n")).toHaveLength(2);
@@ -955,7 +942,7 @@ export const verifyExplicitIndexFailure = Effect.fn("Acceptance.verifyExplicitIn
       XDG_CACHE_HOME: paths.join(projectRoot, ".cache"),
     });
 
-    const output = yield* Schema.decodeEffect(Json)(checked.stdout);
+    const output = yield* Schema.decodeEffect(ProtocolJson)(checked.stdout);
 
     expect(checked.exitCode).toBe(0);
     expect(checked.stderr).toBe("warning[semantic_index_partial]: Run antisprawl index.\n");
@@ -977,7 +964,7 @@ export const verifyExplicitIndexFailure = Effect.fn("Acceptance.verifyExplicitIn
     expect(unreconciled.exitCode).toBe(0);
     expect(unreconciled.stderr).toBe("warning[semantic_index_partial]: Run antisprawl index.\n");
     expect(yield* fs.exists(tracePath)).toBe(false);
-    expect(yield* Schema.decodeEffect(Json)(unreconciled.stdout)).toMatchObject({
+    expect(yield* Schema.decodeEffect(ProtocolJson)(unreconciled.stdout)).toMatchObject({
       analysis: { mode: "structural_only" },
       coverage: { status: "partial" },
     });
@@ -987,7 +974,7 @@ export const verifyExplicitIndexFailure = Effect.fn("Acceptance.verifyExplicitIn
     expect(reconciled.exitCode).toBe(0);
     expect(yield* fs.exists(tracePath)).toBe(true);
     expect((yield* fs.readFileString(tracePath)).trim().split("\n")).toHaveLength(3);
-    expect(yield* Schema.decodeEffect(Json)(reconciled.stdout)).toMatchObject({
+    expect(yield* Schema.decodeEffect(ProtocolJson)(reconciled.stdout)).toMatchObject({
       analysis: { mode: "semantic", vectorSearch: "sqlite_vec" },
       coverage: { status: "complete" },
     });

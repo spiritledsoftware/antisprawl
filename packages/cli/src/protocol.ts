@@ -17,14 +17,12 @@ export const Coverage = Schema.Struct({
 
 export type Coverage = typeof Coverage.Type;
 
-export const Diagnostic = Schema.Struct({
+const Diagnostic = Schema.Struct({
   severity: Schema.Literal("warning"),
   code: Schema.String,
   path: Schema.optional(Schema.String),
   message: Schema.optional(Schema.String),
 });
-
-export type Diagnostic = typeof Diagnostic.Type;
 
 const FindingLocation = Schema.Struct({
   path: Schema.String,

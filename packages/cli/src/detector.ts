@@ -2,8 +2,6 @@ import { applicationCosine } from "./embedding.ts";
 import type { Finding } from "./protocol.ts";
 import type { StructuralRepresentation } from "./representation.ts";
 
-export type { Finding };
-
 export const detectorVersion = 2;
 
 export const structuralPolicy = {
@@ -17,15 +15,6 @@ export const structuralPolicy = {
 export interface IndexedSymbol extends StructuralRepresentation {
   readonly path: string;
   readonly language: "typescript";
-}
-
-interface FindingLocation {
-  readonly path: string;
-  readonly qualifiedName: string;
-  readonly range: {
-    readonly start: { readonly line: number; readonly column: number };
-    readonly end: { readonly line: number; readonly column: number };
-  };
 }
 
 export interface SemanticAnalysis {
@@ -52,7 +41,7 @@ const compareText = (left: string, right: string) => (left < right ? -1 : left >
 const compareIdentity = (left: IndexedSymbol, right: IndexedSymbol) =>
   compareText(left.path, right.path) || compareText(left.qualifiedName, right.qualifiedName);
 
-const location = (symbol: IndexedSymbol): FindingLocation => ({
+const location = (symbol: IndexedSymbol): Finding["edited"] => ({
   path: symbol.path,
   qualifiedName: symbol.qualifiedName,
   range: {
