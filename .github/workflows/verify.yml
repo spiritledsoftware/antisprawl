@@ -1,0 +1,42 @@
+name: verify
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Install
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Patch TypeScript language tools
+        run: bunx effect-tsgo patch --typescript --oxlint
+
+      - name: Verify
+        run: bun run verify
+
+      - name: Cross-compile release targets
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          entry=packages/cli/src/main.ts
+          for target in bun-linux-x64 bun-linux-arm64 bun-darwin-x64 bun-darwin-arm64 bun-windows-x64; do
+            bun build --compile --target="$target" --outfile="dist/antisprawl-$target" "$entry"
+          done
