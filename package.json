@@ -1,10 +1,14 @@
 {
-  "name": "antisprawl",
+  "name": "antisprawl-workspace",
   "version": "0.0.0",
-  "description": "Keep your agent from writing spaghetti code.",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
   "type": "module",
   "scripts": {
-    "build": "bun build --compile src/main.ts --outfile dist/antisprawl",
+    "build": "bun run --filter antisprawl build",
+    "changeset": "changeset",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "lint": "oxlint",
@@ -13,24 +17,20 @@
     "prepare": "husky && effect-tsgo patch --typescript --oxlint && ./scripts/sync-reference-repos.sh",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "verify": "bun run format:check && bun run lint && bun run typecheck && bun run test"
-  },
-  "dependencies": {
-    "@effect/platform-bun": "4.0.0-rc.115",
-    "@effect/sql-sqlite-bun": "4.0.0-rc.115",
-    "effect": "^4.0.0-rc.115",
-    "web-tree-sitter": "0.27.0"
+    "verify": "bun run format:check && bun run lint && bun run typecheck && bun run test",
+    "version": "changeset version"
   },
   "devDependencies": {
+    "@changesets/cli": "3.0.3",
     "@effect/tsgo": "0.45.0",
-    "@oxlint/plugins": "1.83.0",
+    "@oxlint/plugins": "1.82.0",
     "@types/bun": "1.4.2",
     "husky": "^9.1.7",
     "lint-staged": "^17.5.1",
     "oxfmt": "^0.68.0",
     "oxlint": "1.82.0",
     "oxlint-tsgolint": "7.0.2001",
-    "skills": "^1.5.26",
+    "skills": "^1.6.0",
     "typescript": "^7.0.2"
   },
   "devEngines": {

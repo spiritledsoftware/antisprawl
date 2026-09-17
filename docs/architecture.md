@@ -357,13 +357,13 @@ The initial hook deadline is five seconds and remains configurable. Explicit `in
 
 One watcher runs per project. Agent sessions attach leases; the watcher exits after the final lease disappears or an idle timeout expires. It ignores `.antisprawl/`, configured exclusions, and its own cache paths.
 
-Watcher events are lossy hints, not the source of truth. The watcher debounces atomic-save bursts and queues paths but does not call the embedding provider. Structured edit hooks enqueue exact paths as a fast path. The adapter flushes queued paths at its strongest available pre-model boundary.
+Watcher events are lossy hints, not the source of truth. The watcher debounces atomic-save bursts and queues paths but does not call the embedding provider. Structured edit hooks use exact paths as a fast path. The Pi adapter checks each successful `edit` or `write` result before that result is finalized; later watcher and reconciliation work queues paths that lack an exact tool-result boundary and flushes them at the strongest available pre-model boundary.
 
 Bounded reconciliation runs at session start, turn end, and periodically during long sessions. It compares actual eligible files with stored content hashes and catches coalesced or dropped watcher events. If reconciliation cannot finish within its budget, Antisprawl continues with degraded coverage and reports that state.
 
 The cross-harness watcher design is documentation/source-backed and must be runtime-tested:
 
-- **Pi:** start and stop through session lifecycle events; flush through the awaited context hook before model requests.
+- **Pi:** invoke named-path checks from the awaited successful `edit` and `write` result hooks. Start and stop the later watcher through session lifecycle events, and reserve the awaited context hook for queued watcher or reconciliation paths before model requests.
 - **Claude Code:** native file-change facilities may feed the queue; synchronous `PostToolBatch` is the strongest flush point before the next model call.
 - **Codex CLI:** a detached helper starts from session lifecycle hooks; `PostToolUse` is only an after-tool flush point, not a universal before-every-model hook.
 
@@ -409,7 +409,7 @@ The repository contains an Agent Plugins v1 manifest for portable identity and s
 
 - Codex uses `extensions.com.openai` hook declarations.
 - Claude uses its native plugin manifest and hook configuration.
-- Pi uses its package manifest and an extension that shells out with `child_process`.
+- Pi uses the `@antisprawl/pi` package manifest and an extension that invokes the executable through Pi's `pi.exec` API.
 
 The client overlays remain Effect-free and communicate only through the compiled executable's JSON protocol. Plugin manifests own hook registration. `antisprawl init` does not rewrite a supported client's settings when its plugin is installed; it prints manual instructions when no supported plugin is detected.
 
@@ -434,7 +434,7 @@ Initial release targets are:
 
 Musl and Windows ARM64 follow only after CI verifies the complete parser, database, provider, and fallback path.
 
-GitHub Releases publish checksummed standalone executables. npm provides a convenience launcher with platform-specific optional binary packages. Direct-download users require neither Node nor Bun at runtime. The executable never self-updates.
+GitHub Releases publish checksummed standalone executables. npm publishes the `antisprawl` convenience launcher with generated `@antisprawl/<platform-arch>` optional binary packages, while `@antisprawl/pi` remains a separately installed adapter. Direct-download users require neither Node nor Bun at runtime. The executable never self-updates.
 
 Grammar assets may be installed lazily, but pinned project assets do not update automatically. Binary and grammar provenance is visible through `status`.
 
@@ -503,7 +503,7 @@ Add:
 - Agent Plugin and both skills;
 - supported release binaries and reports.
 
-The repository remains one package with ordinary `src/`, `tests/`, `skills/`, and client-overlay directories. Platform npm packages are generated during release rather than maintained as a source monorepo.
+The repository is a private workspace monorepo. `packages/cli` owns the executable and `packages/pi` owns the separately installable, Effect-free Pi adapter; later client overlays receive their own workspace only when their packaging requires it. Platform npm packages are generated during release rather than maintained as source workspaces. See [ADR-0001](adr/0001-separate-cli-and-pi-workspaces.md).
 
 ## 19. Empirical parameters
 
