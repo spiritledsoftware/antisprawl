@@ -9,6 +9,7 @@ import * as Command from "effect/unstable/cli/Command";
 import * as Flag from "effect/unstable/cli/Flag";
 import { checkProject, dryRunIndex, indexProject } from "./app.ts";
 import { AppError, appError } from "./errors.ts";
+import { encodeProtocolJson, type ProtocolOutput } from "./protocol.ts";
 
 const expectedBunVersion = packageJson.devEngines.packageManager.version;
 
@@ -20,21 +21,17 @@ const requireBunVersion =
         `Expected Bun ${expectedBunVersion}, got ${process.versions.bun}.`,
       );
 
-const emitOutput = (output: {
-  readonly diagnostics: ReadonlyArray<{
-    readonly code: string;
-    readonly path?: string;
-    readonly message?: string;
-  }>;
-}) =>
+const emitOutput = (output: ProtocolOutput) =>
   Effect.gen(function* () {
+    const json = yield* encodeProtocolJson(output).pipe(
+      Effect.mapError(() => appError("output_invalid", "The command produced invalid output.")),
+    );
+
     for (const diagnostic of output.diagnostics) {
       yield* Console.error(
         `warning[${diagnostic.code}]${diagnostic.path === undefined ? "" : `: ${diagnostic.path}`}${diagnostic.message === undefined ? "" : `: ${diagnostic.message}`}`,
       );
     }
-
-    const json = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(output);
 
     yield* Console.log(json);
   });
