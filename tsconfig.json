@@ -58,5 +58,5 @@
       }
     ]
   },
-  "exclude": ["packages/pi"]
+  "exclude": ["packages/pi", "scripts", "dist"]
 }

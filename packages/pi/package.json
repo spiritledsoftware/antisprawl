@@ -5,6 +5,11 @@
   "keywords": [
     "pi-package"
   ],
+  "files": [
+    "src",
+    "README.md",
+    "CONTEXT.md"
+  ],
   "type": "module",
   "publishConfig": {
     "access": "public"
