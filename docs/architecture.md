@@ -325,7 +325,7 @@ It does not store Findings, Finding evidence, Finding outcomes, or delivery hist
 
 It stores no source, prompts, commands, transcripts, or credentials.
 
-The Index uses one canonical ordinary float32 vector BLOB representation for both search paths. On Linux x64, the executable embeds pinned `asg017/sqlite-vec` v0.1.9, verifies it, atomically extracts it to a private versioned cache, loads it on the query connection, and probes its version and cosine function. sqlite-vec retrieves candidates within a dimension-derived float32 error margin of the semantic threshold. Application full-precision cosine rescoring of those candidates remains authoritative for gates, public evidence, and ranking. Inputs outside the margin's safe numeric range, or any digest, extraction, load, probe, or query failure, switch the whole Edit batch to application exact search over the same BLOBs without reindexing or changing Coverage.
+The Index uses one canonical ordinary float32 vector BLOB representation for both search paths. Each linux-x64, linux-arm64, darwin-x64, darwin-arm64, and windows-x64 executable embeds only its pinned `asg017/sqlite-vec` v0.1.9 loadable, verifies it, atomically extracts it to a private versioned cache, loads it on the query connection, and probes its version and cosine function. sqlite-vec retrieves candidates within a dimension-derived float32 error margin of the semantic threshold. Application full-precision cosine rescoring of those candidates remains authoritative for gates, public evidence, and ranking. Inputs outside the margin's safe numeric range, or any digest, extraction, load, probe, or query failure, switch the whole Edit batch to application exact search over the same BLOBs without reindexing or changing Coverage.
 
 Quantized search requires recall benchmarks before enablement. ANN indexes are a v1 non-goal. LanceDB, USearch, and alternate storage engines are deferred until measured scale requires them.
 
@@ -514,7 +514,6 @@ The architecture deliberately does not fix values that must come from evidence:
 - embedding candidate count;
 - 384 versus 1536 dimensions;
 - watcher debounce and reconciliation intervals;
-- sqlite-vec target support;
 - whether quantized search preserves adequate recall.
 
 These values are versioned once selected and remain visible in configuration or index provenance.

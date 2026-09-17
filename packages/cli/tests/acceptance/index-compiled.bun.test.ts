@@ -39,6 +39,8 @@ compiledTest(
               "build",
               "--compile",
               "--target=bun-linux-x64",
+              "--asset",
+              "vendor/sqlite-vec/linux-x64/vec0.so",
               sourceEntrypoint,
               "--outfile",
               executable,

@@ -7,7 +7,8 @@ import * as Path from "effect/Path";
 import { nativeSearch } from "../../src/app.ts";
 import { detectProbableDuplicates, type IndexedSymbol } from "../../src/detector.ts";
 import { configuredEmbeddingProvider } from "../../src/embedding.ts";
-import { searchNativeCandidates } from "../../src/vector-search.ts";
+import provenance from "../../vendor/sqlite-vec/provenance.json" with { type: "json" };
+import { searchNativeCandidates, sqliteVecHost } from "../../src/vector-search.ts";
 
 const run = <A, E>(effect: Effect.Effect<A, E, BunServices.BunServices>) =>
   Effect.runPromise(effect.pipe(Effect.provide(BunServices.layer)));
@@ -131,9 +132,16 @@ test("sqlite-vec retrieves all ordinary vector BLOB candidates by cosine", () =>
           const appDirectory = paths.join(cachePath, "antisprawl");
           const [versionDirectory] = yield* fs.readDirectory(appDirectory);
 
+          const host = sqliteVecHost(process.platform, process.arch);
+          const record = host === undefined ? undefined : provenance.libraries[host];
+          const filename = record?.library.slice(record.library.lastIndexOf("/") + 1);
+
+          expect(host).toBeDefined();
+          expect(record).toBeDefined();
+          expect(versionDirectory).toContain(`sqlite-vec-v0.1.9-${host}-`);
           expect((yield* fs.stat(appDirectory)).mode & 0o777).toBe(0o700);
           expect(
-            (yield* fs.stat(paths.join(appDirectory, versionDirectory!, "vec0.so"))).mode & 0o777,
+            (yield* fs.stat(paths.join(appDirectory, versionDirectory!, filename!))).mode & 0o777,
           ).toBe(0o600);
         }),
       ),
@@ -208,6 +216,41 @@ test("native search wiring preserves boundary Findings while reducing rescoring"
     ),
   );
 });
+
+test("sqlite-vec host mapping covers the five CLI targets", () => {
+  expect(sqliteVecHost("linux", "x64")).toBe("linux-x64");
+  expect(sqliteVecHost("linux", "arm64")).toBe("linux-arm64");
+  expect(sqliteVecHost("darwin", "x64")).toBe("darwin-x64");
+  expect(sqliteVecHost("darwin", "arm64")).toBe("darwin-arm64");
+  expect(sqliteVecHost("win32", "x64")).toBe("windows-x64");
+  expect(sqliteVecHost("win32", "arm64")).toBeUndefined();
+  expect(sqliteVecHost("freebsd", "x64")).toBeUndefined();
+  expect(Object.keys(provenance.libraries).sort()).toEqual([
+    "darwin-arm64",
+    "darwin-x64",
+    "linux-arm64",
+    "linux-x64",
+    "windows-x64",
+  ]);
+});
+
+test("vendored sqlite-vec loadables match provenance digests", () =>
+  run(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const paths = yield* Path.Path;
+
+      for (const record of Object.values(provenance.libraries)) {
+        const bytes = yield* fs.readFile(
+          paths.join(import.meta.dir, "../../vendor/sqlite-vec", record.library),
+        );
+
+        expect(Bun.CryptoHasher.hash("sha256", bytes, "hex"), record.library).toBe(
+          record.librarySha256,
+        );
+      }
+    }),
+  ));
 
 test("native digest, extraction, load, and probe failures stay safe", () =>
   run(
