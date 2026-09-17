@@ -1,0 +1,30 @@
+{
+  "name": "@antisprawl/pi",
+  "version": "0.0.0",
+  "description": "Pi extension that checks successful edits for Probable duplicates.",
+  "keywords": [
+    "pi-package"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.1"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "bun",
+      "version": "1.4.2",
+      "onFail": "error"
+    }
+  },
+  "pi": {
+    "extensions": [
+      "./src/extension.ts"
+    ]
+  }
+}

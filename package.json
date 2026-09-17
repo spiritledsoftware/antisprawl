@@ -16,7 +16,7 @@
     "lint:staged": "lint-staged",
     "prepare": "husky && effect-tsgo patch --typescript --oxlint && ./scripts/sync-reference-repos.sh",
     "test": "bun test",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p packages/pi",
     "verify": "bun run format:check && bun run lint && bun run typecheck && bun run test",
     "version": "changeset version"
   },
