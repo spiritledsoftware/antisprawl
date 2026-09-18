@@ -1,6 +1,6 @@
 {
   "name": "antisprawl",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "private": true,
   "description": "Keep your agent from writing spaghetti code.",
   "type": "module",

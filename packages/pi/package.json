@@ -1,6 +1,6 @@
 {
   "name": "@antisprawl/pi",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Pi extension that checks successful edits for Probable duplicates.",
   "keywords": [
     "pi-package"
