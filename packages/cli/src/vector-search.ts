@@ -4,12 +4,13 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import sqliteVecAsset from "../vendor/sqlite-vec/linux-x64/vec0.so" with { type: "file" };
+import provenance from "../vendor/sqlite-vec/provenance.json" with { type: "json" };
 import { appError } from "./errors.ts";
+import { sqliteVecHost } from "./sqlite-vec-target.ts";
 
 const version = "v0.1.9";
 
-const librarySha256 = "5923730861b86c707cca5602b5f91092f9e52a46706dbc6e269fd4bb9c4498e8";
+export { sqliteVecHost };
 
 const ProbeRow = Schema.Struct({ version: Schema.Literal(version), distance: Schema.Finite });
 
@@ -75,11 +76,21 @@ const sha256 = (bytes: Uint8Array) => Bun.CryptoHasher.hash("sha256", bytes, "he
 const extractedLibrary = Effect.fn("VectorSearch.extract")(function* (
   environment: Readonly<Record<string, string | undefined>>,
 ) {
-  if (process.platform !== "linux" || process.arch !== "x64") return yield* safeError();
+  const target = sqliteVecHost(process.platform, process.arch);
+  const record = target === undefined ? undefined : provenance.libraries[target];
+
+  if (target === undefined || record === undefined) return yield* safeError();
 
   const fs = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;
-  const bundled = yield* fs.readFile(sqliteVecAsset);
+  const librarySha256 = record.librarySha256;
+  const filename = record.library.slice(record.library.lastIndexOf("/") + 1);
+
+  const bundled = yield* fs.readFile(
+    Bun.isStandaloneExecutable
+      ? paths.join(import.meta.dir, filename)
+      : paths.join(import.meta.dir, "../vendor/sqlite-vec", record.library),
+  );
 
   if (
     environment.ANTISPRAW_ACCEPTANCE_VECTOR_SEARCH_FAILURE === "digest" ||
@@ -94,8 +105,8 @@ const extractedLibrary = Effect.fn("VectorSearch.extract")(function* (
 
   const cacheRoot = environment.XDG_CACHE_HOME ?? paths.join(homedir(), ".cache");
   const appDirectory = paths.join(cacheRoot, "antisprawl");
-  const directory = paths.join(appDirectory, `sqlite-vec-${version}-linux-x64-${librarySha256}`);
-  const library = paths.join(directory, "vec0.so");
+  const directory = paths.join(appDirectory, `sqlite-vec-${version}-${target}-${librarySha256}`);
+  const library = paths.join(directory, filename);
 
   yield* fs.makeDirectory(appDirectory, { recursive: true, mode: 0o700 });
   yield* fs.chmod(appDirectory, 0o700);
@@ -106,7 +117,10 @@ const extractedLibrary = Effect.fn("VectorSearch.extract")(function* (
   const valid = existing && sha256(yield* fs.readFile(library)) === librarySha256;
 
   if (!valid) {
-    const temporary = paths.join(directory, `.vec0-${process.pid}-${Bun.randomUUIDv7()}.so`);
+    const temporary = paths.join(
+      directory,
+      `.vec0-${process.pid}-${Bun.randomUUIDv7()}${filename.slice(filename.lastIndexOf("."))}`,
+    );
 
     yield* fs
       .writeFile(temporary, bundled)

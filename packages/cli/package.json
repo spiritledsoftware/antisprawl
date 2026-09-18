@@ -5,7 +5,7 @@
   "description": "Keep your agent from writing spaghetti code.",
   "type": "module",
   "scripts": {
-    "build": "bun build --compile src/main.ts --outfile dist/antisprawl"
+    "build": "bun build.ts"
   },
   "dependencies": {
     "@effect/platform-bun": "4.0.0-rc.115",

@@ -49,6 +49,8 @@ liveTest(
               "build",
               "--compile",
               "--target=bun-linux-x64",
+              "--asset",
+              "vendor/sqlite-vec/linux-x64/vec0.so",
               "--define",
               "globalThis.ANTISPRAW_LIVE_PROFILE_MATRIX=true",
               sourceEntrypoint,

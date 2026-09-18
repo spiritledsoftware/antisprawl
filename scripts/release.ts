@@ -2,6 +2,8 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { sqliteVecHost } from "../packages/cli/src/sqlite-vec-target.ts";
+import provenance from "../packages/cli/vendor/sqlite-vec/provenance.json" with { type: "json" };
 import cliPackage from "../packages/cli/package.json" with { type: "json" };
 import piPackage from "../packages/pi/package.json" with { type: "json" };
 
@@ -133,10 +135,23 @@ const main = () => {
     const archiveName = `antisprawl-v${cliVersion}-${archiveOs(target.os)}-${target.cpu}.${target.archive}`;
     const archivePath = join(archives, archiveName);
 
+    const vecTarget = sqliteVecHost(target.os, target.cpu);
+    const vecLibrary = vecTarget === undefined ? undefined : provenance.libraries[vecTarget];
+
+    if (vecLibrary === undefined) throw new Error(`missing sqlite-vec for ${target.bun}`);
+
     mkdirSync(pkgDir, { recursive: true });
     run(
       "bun",
-      ["build", "--compile", `--target=${target.bun}`, `--outfile=${outfile}`, entry],
+      [
+        "build",
+        "--compile",
+        `--target=${target.bun}`,
+        "--asset",
+        join(root, "packages/cli/vendor/sqlite-vec", vecLibrary.library),
+        `--outfile=${outfile}`,
+        entry,
+      ],
       root,
     );
     chmodSync(outfile, 0o755);
